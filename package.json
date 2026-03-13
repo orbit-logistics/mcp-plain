@@ -1,5 +1,5 @@
 {
-  "name": "@orbit-logistics/mcp-plain",
+  "name": "@orbitlogistics/mcp-plain",
   "version": "0.1.0",
   "description": "MCP server for the Plain customer support platform",
   "type": "module",

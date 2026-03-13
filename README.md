@@ -1,4 +1,4 @@
-# @orbit-logistics/mcp-plain
+# @orbitlogistics/mcp-plain
 
 MCP server for the [Plain](https://plain.com) customer support platform. Provides tools for managing threads, help center articles, and more via the [Model Context Protocol](https://modelcontextprotocol.io).
 
@@ -13,7 +13,7 @@ Add to your project's `.claude/settings.json`:
   "mcpServers": {
     "plain": {
       "command": "npx",
-      "args": ["-y", "@orbit-logistics/mcp-plain@latest"],
+      "args": ["-y", "@orbitlogistics/mcp-plain@latest"],
       "env": {
         "PLAIN_API_KEY": "${PLAIN_API_KEY}"
       }
@@ -29,7 +29,7 @@ Then set `PLAIN_API_KEY` in your shell environment (e.g. `.zshrc`, `.envrc`, or 
 Run the server directly:
 
 ```bash
-PLAIN_API_KEY=plainApiKey_xxx npx @orbit-logistics/mcp-plain@latest
+PLAIN_API_KEY=plainApiKey_xxx npx @orbitlogistics/mcp-plain@latest
 ```
 
 ## Tools
