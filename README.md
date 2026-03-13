@@ -34,6 +34,8 @@ PLAIN_API_KEY=plainApiKey_xxx npx @orbit-logistics/mcp-plain@latest
 
 ## Tools
 
+> **Note:** This server does not cover the full Plain API — only the endpoints we actively use. If you need additional methods, PRs are welcome!
+
 ### Threads
 - `list_threads` - List threads with filters (status, priority, labels, customer, tenant)
 - `get_thread` - Get full thread details by ID (includes timeline)
