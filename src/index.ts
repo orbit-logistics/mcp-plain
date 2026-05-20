@@ -252,6 +252,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Markdown content for the internal note",
           },
+          customerId: {
+            type: "string",
+            description:
+              "Customer ID for the note. Required by Plain's CreateNoteInput; if omitted, the server fetches it from the thread.",
+          },
+          text: {
+            type: "string",
+            description:
+              "Plain-text version of the note. Required by Plain's CreateNoteInput; defaults to the markdown content if omitted.",
+          },
         },
         required: ["threadId", "markdown"],
       },

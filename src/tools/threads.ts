@@ -108,6 +108,12 @@ const THREAD_QUERY = `
                     plainText
                   }
                 }
+                attachments {
+                  id
+                  fileName
+                  fileSize { kiloBytes }
+                  fileMimeType
+                }
               }
               ... on SlackMessageEntry {
                 text
@@ -235,6 +241,12 @@ const THREAD_BY_REF_QUERY = `
                     plainText
                   }
                 }
+                attachments {
+                  id
+                  fileName
+                  fileSize { kiloBytes }
+                  fileMimeType
+                }
               }
               ... on SlackMessageEntry {
                 text
@@ -329,6 +341,54 @@ const parseThreadFields = (
   }
 
   return result;
+};
+
+/**
+ * Format a Plain SDK error with details from graphqlErrors and requestId so
+ * callers see actionable info (field-level codes, path, request ID) instead of
+ * a generic "Malformed query" message.
+ */
+const formatPlainError = (error: unknown): string => {
+  if (!error || typeof error !== "object") {
+    return String(error);
+  }
+  const e = error as {
+    type?: string;
+    code?: string;
+    message?: string;
+    requestId?: string;
+    graphqlErrors?: Array<{
+      message: string;
+      path?: ReadonlyArray<string | number>;
+      extensions?: { code?: string };
+    }>;
+    fields?: Array<{ field: string; type: string; message?: string }>;
+    errorDetails?: { message?: string; fields?: Array<{ field: string; type: string; message?: string }> };
+  };
+  const parts: string[] = [];
+  if (e.message) parts.push(e.message);
+  if (e.type) parts.push(`type=${e.type}`);
+  if (e.code) parts.push(`code=${e.code}`);
+  if (e.graphqlErrors?.length) {
+    const details = e.graphqlErrors
+      .map((g) => {
+        const path = g.path?.length ? g.path.join(".") : undefined;
+        const code = g.extensions?.code;
+        const tags = [path && `path=${path}`, code && `code=${code}`].filter(Boolean).join(", ");
+        return tags ? `${g.message} (${tags})` : g.message;
+      })
+      .join("; ");
+    parts.push(`graphqlErrors: ${details}`);
+  }
+  const fieldErrors = e.fields ?? e.errorDetails?.fields;
+  if (fieldErrors?.length) {
+    const fields = fieldErrors
+      .map((f) => `${f.field}: ${f.type}${f.message ? ` (${f.message})` : ""}`)
+      .join("; ");
+    parts.push(`fields: ${fields}`);
+  }
+  if (e.requestId) parts.push(`requestId=${e.requestId}`);
+  return parts.length > 0 ? parts.join(" | ") : "unknown error";
 };
 
 /**
@@ -486,6 +546,7 @@ const parseTimelineEntry = (node: RawTimelineEntry): TimelineEntry => {
         title: entry.title ?? undefined,
         externalId: entry.externalId ?? undefined,
         content,
+        attachments: parseAttachments(entry.attachments),
       };
     }
     case "SlackMessageEntry":
@@ -572,7 +633,7 @@ export const listThreads = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to list threads: ${result.error.message}`);
+    throw new Error(`Failed to list threads: ${formatPlainError(result.error)}`);
   }
 
   const threads: ThreadSummary[] = result.data.threads.map((thread) => ({
@@ -666,7 +727,7 @@ export const getThread = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to get thread: ${result.error.message}`);
+    throw new Error(`Failed to get thread: ${formatPlainError(result.error)}`);
   }
 
   const data = result.data as RawThreadResponse;
@@ -719,7 +780,7 @@ export const getThreadByRef = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to get thread: ${result.error.message}`);
+    throw new Error(`Failed to get thread: ${formatPlainError(result.error)}`);
   }
 
   const data = result.data as RawThreadByRefResponse;
@@ -769,7 +830,7 @@ export const getThreadFields = async (
   const result = await client.getThread({ threadId: input.threadId });
 
   if (result.error) {
-    throw new Error(`Failed to get thread fields: ${result.error.message}`);
+    throw new Error(`Failed to get thread fields: ${formatPlainError(result.error)}`);
   }
 
   const thread = result.data;
@@ -830,14 +891,14 @@ export const getAttachmentDownloadUrl = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to get attachment download URL: ${result.error.message}`);
+    throw new Error(`Failed to get attachment download URL: ${formatPlainError(result.error)}`);
   }
 
   const data = result.data as RawAttachmentDownloadUrlResponse;
   const response = data.createAttachmentDownloadUrl;
 
   if (response.error) {
-    throw new Error(`Failed to get attachment download URL: ${response.error.message}`);
+    throw new Error(`Failed to get attachment download URL: ${formatPlainError(response.error)}`);
   }
 
   if (!response.attachmentDownloadUrl) {
@@ -930,7 +991,7 @@ export const replyToThread = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to reply to thread: ${result.error.message}`);
+    throw new Error(`Failed to reply to thread: ${formatPlainError(result.error)}`);
   }
 
   return { success: true };
@@ -949,7 +1010,7 @@ export const markThreadAsDone = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to mark thread as done: ${result.error.message}`);
+    throw new Error(`Failed to mark thread as done: ${formatPlainError(result.error)}`);
   }
 
   return {
@@ -1019,14 +1080,14 @@ export const upsertThreadField = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to upsert thread field: ${result.error.message}`);
+    throw new Error(`Failed to upsert thread field: ${formatPlainError(result.error)}`);
   }
 
   const data = result.data as RawUpsertThreadFieldResponse;
   const response = data.upsertThreadField;
 
   if (response.error) {
-    throw new Error(`Failed to upsert thread field: ${response.error.message}`);
+    throw new Error(`Failed to upsert thread field: ${formatPlainError(response.error)}`);
   }
 
   return { success: true, key: input.key, value: input.value };
@@ -1066,29 +1127,67 @@ interface RawCreateNoteResponse {
   };
 }
 
+const THREAD_CUSTOMER_QUERY = `
+  query GetThreadCustomer($threadId: ID!) {
+    thread(threadId: $threadId) {
+      customer { id }
+    }
+  }
+`;
+
 /**
  * Post an internal note on a thread. Internal notes are visible to the
  * support team only and are NOT sent to the customer.
+ *
+ * Plain's CreateNoteInput requires customerId and text. If callers only pass
+ * threadId + markdown, derive the customerId from the thread and use markdown
+ * as the text fallback.
  */
 export const addInternalNote = async (
   input: AddInternalNoteInput
 ): Promise<{ success: true; noteId: string }> => {
   const client = getPlainClient();
 
+  let customerId = input.customerId;
+  if (!customerId) {
+    const lookup = await client.rawRequest({
+      query: THREAD_CUSTOMER_QUERY,
+      variables: { threadId: input.threadId },
+    });
+    if (lookup.error) {
+      throw new Error(`Failed to look up thread customer: ${formatPlainError(lookup.error)}`);
+    }
+    const lookupData = lookup.data as { thread?: { customer?: { id: string } | null } | null };
+    const id = lookupData.thread?.customer?.id;
+    if (!id) {
+      throw new Error(`Could not resolve customerId for thread ${input.threadId}`);
+    }
+    customerId = id;
+  }
+
+  const text = input.text ?? input.markdown;
+
   const result = await client.rawRequest({
     query: CREATE_NOTE_MUTATION,
-    variables: { input: { threadId: input.threadId, markdown: input.markdown } },
+    variables: {
+      input: {
+        threadId: input.threadId,
+        customerId,
+        text,
+        markdown: input.markdown,
+      },
+    },
   });
 
   if (result.error) {
-    throw new Error(`Failed to add internal note: ${result.error.message}`);
+    throw new Error(`Failed to add internal note: ${formatPlainError(result.error)}`);
   }
 
   const data = result.data as RawCreateNoteResponse;
   const response = data.createNote;
 
   if (response.error) {
-    throw new Error(`Failed to add internal note: ${response.error.message}`);
+    throw new Error(`Failed to add internal note: ${formatPlainError(response.error)}`);
   }
 
   if (!response.note) {
@@ -1113,7 +1212,7 @@ export const addLabelsToThread = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to add labels: ${result.error.message}`);
+    throw new Error(`Failed to add labels: ${formatPlainError(result.error)}`);
   }
 
   return { success: true, labelCount: input.labelTypeIds.length };
@@ -1133,7 +1232,7 @@ export const getLabelTypes = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to get label types: ${result.error.message}`);
+    throw new Error(`Failed to get label types: ${formatPlainError(result.error)}`);
   }
 
   return {
@@ -1143,21 +1242,6 @@ export const getLabelTypes = async (
       isArchived: lt.isArchived,
     })),
   };
-};
-
-/**
- * Format a Plain SDK error into a detailed error message,
- * including field-level validation details when available.
- */
-const formatPlainError = (error: { message: string; type?: string; code?: string; fields?: Array<{ field: string; message: string; type: string }> }): string => {
-  let msg = error.message;
-  if (error.type) msg += ` [${error.type}]`;
-  if (error.code) msg += ` (code: ${error.code})`;
-  if (error.fields && error.fields.length > 0) {
-    const fieldDetails = error.fields.map((f) => `  - ${f.field}: ${f.message} (${f.type})`).join("\n");
-    msg += `\nField errors:\n${fieldDetails}`;
-  }
-  return msg;
 };
 
 /**

@@ -107,6 +107,7 @@ export interface CustomTimelineEntry extends TimelineEntryBase {
   title?: string;
   externalId?: string;
   content?: string;
+  attachments?: Attachment[];
 }
 
 export interface SlackTimelineEntry extends TimelineEntryBase {
@@ -260,6 +261,18 @@ export const upsertThreadFieldInputSchema = z.object({
 export const addInternalNoteInputSchema = z.object({
   threadId: z.string().describe("The ID of the thread to add a note to"),
   markdown: z.string().describe("Markdown content for the internal note"),
+  customerId: z
+    .string()
+    .optional()
+    .describe(
+      "Customer ID for the note. Required by Plain's CreateNoteInput; if omitted, the server fetches it from the thread."
+    ),
+  text: z
+    .string()
+    .optional()
+    .describe(
+      "Plain-text version of the note. Required by Plain's CreateNoteInput; defaults to the markdown content if omitted."
+    ),
 });
 
 export const replyToThreadInputSchema = z.object({

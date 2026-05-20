@@ -1190,7 +1190,7 @@ describe("createThread", () => {
 
     await expect(
       createThread({ customerEmail: "bad-email", markdown: "test" })
-    ).rejects.toThrow("Failed to upsert customer: Invalid email [VALIDATION] (code: invalid_email)");
+    ).rejects.toThrow("Failed to upsert customer: Invalid email | type=VALIDATION | code=invalid_email");
   });
 
   it("should throw with detailed error when createThread fails", async () => {
@@ -1206,6 +1206,6 @@ describe("createThread", () => {
 
     await expect(
       createThread({ customerEmail: "user@example.com", markdown: "test" })
-    ).rejects.toThrow("Field errors:");
+    ).rejects.toThrow("fields: components: VALIDATION (Text exceeds maximum length)");
   });
 });
