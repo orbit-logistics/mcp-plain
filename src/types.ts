@@ -24,6 +24,7 @@ export interface ThreadCustomFields {
   affectedStage?: string;
   requestFeature?: boolean;
   sentrySession?: string;
+  agentReadiness?: string;
 }
 
 // Field key mapping from Plain's snake_case to camelCase
@@ -38,6 +39,7 @@ export const FIELD_KEY_MAP: Record<string, keyof ThreadCustomFields> = {
   stage: "affectedStage",
   request_feature: "requestFeature",
   sentry_session: "sentrySession",
+  agent_readiness: "agentReadiness",
 };
 
 // Thread label info
@@ -251,7 +253,7 @@ export const upsertThreadFieldInputSchema = z.object({
   key: z
     .string()
     .describe(
-      "Custom field key in snake_case, e.g. impact_level, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, request_feature"
+      "Custom field key in snake_case, e.g. impact_level, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, request_feature, agent_readiness"
     ),
   value: z
     .string()

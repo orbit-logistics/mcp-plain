@@ -226,7 +226,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           key: {
             type: "string",
             description:
-              "Custom field key in snake_case, e.g. impact_level, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, request_feature",
+              "Custom field key in snake_case, e.g. impact_level, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, request_feature, agent_readiness",
           },
           value: {
             type: "string",
