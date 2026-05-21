@@ -170,6 +170,10 @@ export interface ThreadDetails extends ThreadSummary {
   description?: string;
   externalId?: string;
   customFields: ThreadCustomFields;
+  // Raw custom field map indexed by Plain's snake_case key. Includes every
+  // field on the thread, not just the ones mapped into `customFields`. Use
+  // this when reading fields the typed shape doesn't model yet.
+  customFieldsRaw: Record<string, string | boolean>;
   timeline: TimelineEntry[];
 }
 
@@ -258,6 +262,12 @@ export const upsertThreadFieldInputSchema = z.object({
   value: z
     .string()
     .describe("Field value to set. For boolean fields like request_feature, use 'true' or 'false'"),
+  type: z
+    .enum(["BOOL", "ENUM", "STRING"])
+    .optional()
+    .describe(
+      "Plain field schema type. Defaults: request_feature=BOOL; impact_level/agent_readiness=ENUM; everything else=STRING. Override when writing a key the server doesn't know about."
+    ),
 });
 
 export const addInternalNoteInputSchema = z.object({

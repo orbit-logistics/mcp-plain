@@ -233,6 +233,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Field value to set. For boolean fields like request_feature, use 'true' or 'false'",
           },
+          type: {
+            type: "string",
+            enum: ["BOOL", "ENUM", "STRING"],
+            description:
+              "Plain field schema type. Auto-detected by key (request_feature=BOOL; impact_level/agent_readiness=ENUM; default STRING). Override when writing a key the server doesn't know about.",
+          },
         },
         required: ["threadId", "key", "value"],
       },

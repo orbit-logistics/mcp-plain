@@ -344,6 +344,25 @@ const parseThreadFields = (
 };
 
 /**
+ * Build a raw key-indexed view of every custom field on the thread, regardless
+ * of whether it's in FIELD_KEY_MAP. Lets callers read fields the typed shape
+ * doesn't model (e.g. agent_readiness before it was added to the map).
+ */
+const parseThreadFieldsRaw = (
+  fields: Array<{ key: string; stringValue?: string | null; booleanValue?: boolean | null }>
+): Record<string, string | boolean> => {
+  const result: Record<string, string | boolean> = {};
+  for (const field of fields) {
+    if (field.booleanValue !== null && field.booleanValue !== undefined) {
+      result[field.key] = field.booleanValue;
+    } else if (field.stringValue !== null && field.stringValue !== undefined) {
+      result[field.key] = field.stringValue;
+    }
+  }
+  return result;
+};
+
+/**
  * Format a Plain SDK error with details from graphqlErrors and requestId so
  * callers see actionable info (field-level codes, path, request ID) instead of
  * a generic "Malformed query" message.
@@ -736,8 +755,9 @@ export const getThread = async (
     throw new Error(`Thread not found: ${input.threadId}`);
   }
 
-  // Parse custom fields
+  // Parse custom fields (typed + raw passthrough)
   const customFields = parseThreadFields(thread.threadFields ?? []);
+  const customFieldsRaw = parseThreadFieldsRaw(thread.threadFields ?? []);
 
   // Parse timeline entries from the thread response, filtering out autoresponses
   const timeline = thread.timelineEntries?.edges
@@ -762,6 +782,7 @@ export const getThread = async (
     createdAt: thread.createdAt.iso8601,
     updatedAt: thread.updatedAt.iso8601,
     customFields,
+    customFieldsRaw,
     timeline,
   };
 };
@@ -789,8 +810,9 @@ export const getThreadByRef = async (
     throw new Error(`Thread not found: ${input.ref}`);
   }
 
-  // Parse custom fields
+  // Parse custom fields (typed + raw passthrough)
   const customFields = parseThreadFields(thread.threadFields ?? []);
+  const customFieldsRaw = parseThreadFieldsRaw(thread.threadFields ?? []);
 
   // Parse timeline entries from the thread response, filtering out autoresponses
   const timeline = thread.timelineEntries?.edges
@@ -815,6 +837,7 @@ export const getThreadByRef = async (
     createdAt: thread.createdAt.iso8601,
     updatedAt: thread.updatedAt.iso8601,
     customFields,
+    customFieldsRaw,
     timeline,
   };
 };
@@ -1020,13 +1043,27 @@ export const markThreadAsDone = async (
 };
 
 /**
- * GraphQL mutation for upserting a thread field
+ * GraphQL mutation for upserting a thread field.
+ *
+ * Plain's current schema requires:
+ *   input: {
+ *     identifier: { threadId, key },
+ *     type: BOOL | ENUM | STRING,
+ *     stringValue? | booleanValue?,
+ *   }
+ *
+ * Earlier versions of this server sent a flat `{ threadId, threadField }`
+ * shape which the API now rejects with "Malformed query, missing or invalid
+ * arguments provided."
  */
 const UPSERT_THREAD_FIELD_MUTATION = `
   mutation UpsertThreadField($input: UpsertThreadFieldInput!) {
     upsertThreadField(input: $input) {
+      result
       threadField {
+        id
         key
+        type
         stringValue
         booleanValue
       }
@@ -1039,13 +1076,13 @@ const UPSERT_THREAD_FIELD_MUTATION = `
   }
 `;
 
-/**
- * Raw response from upsert thread field mutation
- */
 interface RawUpsertThreadFieldResponse {
   upsertThreadField: {
+    result?: string | null;
     threadField?: {
+      id: string;
       key: string;
+      type: string;
       stringValue?: string | null;
       booleanValue?: boolean | null;
     } | null;
@@ -1057,8 +1094,24 @@ interface RawUpsertThreadFieldResponse {
   };
 }
 
-// Boolean field keys that use booleanValue instead of stringValue
+// Boolean field keys that should be sent as type=BOOL with booleanValue.
 const BOOLEAN_FIELD_KEYS = new Set(["request_feature"]);
+
+// Enum field keys that must be sent as type=ENUM. Plain's schema rejects
+// STRING writes against ENUM-typed fields, so this mapping prevents that
+// silent failure mode.
+const ENUM_FIELD_KEYS = new Set(["agent_readiness", "impact_level"]);
+
+type ThreadFieldType = "BOOL" | "ENUM" | "STRING";
+
+const inferFieldType = (key: string, override?: string): ThreadFieldType => {
+  if (override === "BOOL" || override === "ENUM" || override === "STRING") {
+    return override;
+  }
+  if (BOOLEAN_FIELD_KEYS.has(key)) return "BOOL";
+  if (ENUM_FIELD_KEYS.has(key)) return "ENUM";
+  return "STRING";
+};
 
 /**
  * Set or update a custom field value on a thread.
@@ -1066,17 +1119,24 @@ const BOOLEAN_FIELD_KEYS = new Set(["request_feature"]);
  */
 export const upsertThreadField = async (
   input: UpsertThreadFieldInput
-): Promise<{ success: true; key: string; value: string }> => {
+): Promise<{ success: true; key: string; value: string; type: ThreadFieldType; result?: string }> => {
   const client = getPlainClient();
 
-  const isBoolean = BOOLEAN_FIELD_KEYS.has(input.key);
-  const threadField = isBoolean
-    ? { key: input.key, booleanValue: input.value === "true" }
-    : { key: input.key, stringValue: input.value };
+  const type = inferFieldType(input.key, input.type);
+  const valueField =
+    type === "BOOL"
+      ? { booleanValue: input.value === "true" }
+      : { stringValue: input.value };
 
   const result = await client.rawRequest({
     query: UPSERT_THREAD_FIELD_MUTATION,
-    variables: { input: { threadId: input.threadId, threadField } },
+    variables: {
+      input: {
+        identifier: { threadId: input.threadId, key: input.key },
+        type,
+        ...valueField,
+      },
+    },
   });
 
   if (result.error) {
@@ -1090,7 +1150,13 @@ export const upsertThreadField = async (
     throw new Error(`Failed to upsert thread field: ${formatPlainError(response.error)}`);
   }
 
-  return { success: true, key: input.key, value: input.value };
+  return {
+    success: true,
+    key: input.key,
+    value: input.value,
+    type,
+    result: response.result ?? undefined,
+  };
 };
 
 /**
