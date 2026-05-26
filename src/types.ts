@@ -44,7 +44,10 @@ export const FIELD_KEY_MAP: Record<string, keyof ThreadCustomFields> = {
 
 // Thread label info
 export interface ThreadLabel {
+  // The label TYPE id — pass this to add/remove via update_thread_labels.
   id: string;
+  // The applied label's own instance id (used internally for removal).
+  labelId?: string;
   name: string;
 }
 
@@ -306,6 +309,61 @@ export const addLabelsInputSchema = z.object({
     ),
 });
 
+export const updateThreadPriorityInputSchema = z.object({
+  threadId: z.string().describe("The ID of the thread to update"),
+  priority: z
+    .number()
+    .int()
+    .min(0)
+    .max(3)
+    .describe("Plain priority: 0 = Urgent, 1 = High, 2 = Normal, 3 = Low"),
+});
+
+export const updateThreadLabelsInputSchema = z
+  .object({
+    threadId: z.string().describe("The ID of the thread to update"),
+    add: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Label type IDs to add. Use get_label_types to discover available IDs."
+      ),
+    remove: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Label type IDs to remove. The server resolves each to the applied label on the thread; type IDs not currently applied are ignored."
+      ),
+  })
+  .refine((v) => (v.add?.length ?? 0) > 0 || (v.remove?.length ?? 0) > 0, {
+    message: "Provide at least one label type ID in 'add' or 'remove'.",
+  });
+
+// A single field write within update_thread_fields. `type` is optional and
+// auto-detected from the key when omitted (see inferFieldType).
+export const threadFieldUpdateSchema = z.object({
+  key: z
+    .string()
+    .describe(
+      "Custom field key in snake_case. Must be an allowlisted key, e.g. impact_level, agent_readiness, request_feature, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from."
+    ),
+  value: z
+    .string()
+    .describe("Field value. For boolean fields use 'true' or 'false'."),
+  type: z
+    .enum(["BOOL", "ENUM", "STRING"])
+    .optional()
+    .describe("Plain field schema type. Auto-detected from the key if omitted."),
+});
+
+export const updateThreadFieldsInputSchema = z.object({
+  threadId: z.string().describe("The ID of the thread to update"),
+  fields: z
+    .array(threadFieldUpdateSchema)
+    .min(1)
+    .describe("One or more custom field writes to apply to the thread."),
+});
+
 export const getLabelTypesInputSchema = z.object({
   first: z
     .number()
@@ -476,5 +534,8 @@ export type AddInternalNoteInput = z.infer<typeof addInternalNoteInputSchema>;
 export type ReplyToThreadInput = z.infer<typeof replyToThreadInputSchema>;
 export type MarkThreadAsDoneInput = z.infer<typeof markThreadAsDoneInputSchema>;
 export type AddLabelsInput = z.infer<typeof addLabelsInputSchema>;
+export type UpdateThreadPriorityInput = z.infer<typeof updateThreadPriorityInputSchema>;
+export type UpdateThreadLabelsInput = z.infer<typeof updateThreadLabelsInputSchema>;
+export type UpdateThreadFieldsInput = z.infer<typeof updateThreadFieldsInputSchema>;
 export type GetLabelTypesInput = z.infer<typeof getLabelTypesInputSchema>;
 export type CreateThreadInput = z.infer<typeof createThreadInputSchema>;

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { ThreadStatus } from "@team-plain/typescript-sdk";
-import { listThreads, getThread, getThreadByRef, getThreadFields, replyToThread, markThreadAsDone, createThread } from "./threads.js";
+import { listThreads, getThread, getThreadByRef, getThreadFields, replyToThread, markThreadAsDone, createThread, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels } from "./threads.js";
 import { getPlainClient } from "../client.js";
 
 // Mock the client module
@@ -1207,5 +1207,169 @@ describe("createThread", () => {
     await expect(
       createThread({ customerEmail: "user@example.com", markdown: "test" })
     ).rejects.toThrow("fields: components: VALIDATION (Text exceeds maximum length)");
+  });
+});
+
+describe("upsertThreadField", () => {
+  let mockClient: { rawRequest: Mock };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient = { rawRequest: vi.fn() };
+    (getPlainClient as Mock).mockReturnValue(mockClient);
+  });
+
+  const okResponse = (key: string) => ({
+    data: { upsertThreadField: { result: "CREATED", threadField: { id: "tf_1", key, type: "STRING", stringValue: "v", booleanValue: null }, error: null } },
+    error: null,
+  });
+
+  it("sends the identifier/type input shape and ENUM type for agent_readiness", async () => {
+    mockClient.rawRequest.mockResolvedValue(okResponse("agent_readiness"));
+
+    const res = await upsertThreadField({ threadId: "th_1", key: "agent_readiness", value: "ready-for-human" });
+
+    expect(res).toMatchObject({ success: true, key: "agent_readiness", type: "ENUM", result: "CREATED" });
+    const call = mockClient.rawRequest.mock.calls[0]![0];
+    expect(call.variables.input).toEqual({
+      identifier: { threadId: "th_1", key: "agent_readiness" },
+      type: "ENUM",
+      stringValue: "ready-for-human",
+    });
+  });
+
+  it("uses BOOL + booleanValue for request_feature", async () => {
+    mockClient.rawRequest.mockResolvedValue(okResponse("request_feature"));
+
+    await upsertThreadField({ threadId: "th_1", key: "request_feature", value: "true" });
+
+    const call = mockClient.rawRequest.mock.calls[0]![0];
+    expect(call.variables.input).toEqual({
+      identifier: { threadId: "th_1", key: "request_feature" },
+      type: "BOOL",
+      booleanValue: true,
+    });
+  });
+
+  it("surfaces formatted error details on failure", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: null,
+      error: { type: "bad_request", message: "Malformed query", graphqlErrors: [{ message: "bad", path: ["upsertThreadField"], extensions: { code: "BAD_USER_INPUT" } }] },
+    });
+
+    await expect(
+      upsertThreadField({ threadId: "th_1", key: "impact_level", value: "P2" })
+    ).rejects.toThrow("code=BAD_USER_INPUT");
+  });
+});
+
+describe("updateThreadFields", () => {
+  let mockClient: { rawRequest: Mock };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient = { rawRequest: vi.fn() };
+    (getPlainClient as Mock).mockReturnValue(mockClient);
+  });
+
+  it("rejects unknown keys before writing anything", async () => {
+    await expect(
+      updateThreadFields({ threadId: "th_1", fields: [{ key: "not_a_field", value: "x" }] })
+    ).rejects.toThrow("Unknown custom field key(s): not_a_field");
+    expect(mockClient.rawRequest).not.toHaveBeenCalled();
+  });
+
+  it("applies multiple allowlisted fields sequentially", async () => {
+    mockClient.rawRequest.mockImplementation((req) => Promise.resolve({
+      data: { upsertThreadField: { result: "UPDATED", threadField: { id: "tf", key: req.variables.input.identifier.key, type: "STRING", stringValue: "v", booleanValue: null }, error: null } },
+      error: null,
+    }));
+
+    const res = await updateThreadFields({
+      threadId: "th_1",
+      fields: [
+        { key: "agent_readiness", value: "ready-for-human" },
+        { key: "impact_level", value: "P2" },
+      ],
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.updated).toHaveLength(2);
+    expect(res.updated.map((u) => u.type)).toEqual(["ENUM", "ENUM"]);
+    expect(mockClient.rawRequest).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("updateThreadPriority", () => {
+  let mockClient: { changeThreadPriority: Mock };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient = { changeThreadPriority: vi.fn() };
+    (getPlainClient as Mock).mockReturnValue(mockClient);
+  });
+
+  it("calls changeThreadPriority with the numeric priority", async () => {
+    mockClient.changeThreadPriority.mockResolvedValue({ data: { id: "th_1" }, error: null });
+
+    const res = await updateThreadPriority({ threadId: "th_1", priority: 0 });
+
+    expect(res).toEqual({ success: true, threadId: "th_1", priority: 0 });
+    expect(mockClient.changeThreadPriority).toHaveBeenCalledWith({ threadId: "th_1", priority: 0 });
+  });
+
+  it("throws a formatted error on failure", async () => {
+    mockClient.changeThreadPriority.mockResolvedValue({ data: null, error: { type: "forbidden", message: "nope" } });
+
+    await expect(updateThreadPriority({ threadId: "th_1", priority: 2 })).rejects.toThrow(
+      "Failed to update thread priority: nope | type=forbidden"
+    );
+  });
+});
+
+describe("updateThreadLabels", () => {
+  let mockClient: { addLabels: Mock; removeLabels: Mock; rawRequest: Mock };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient = { addLabels: vi.fn(), removeLabels: vi.fn(), rawRequest: vi.fn() };
+    (getPlainClient as Mock).mockReturnValue(mockClient);
+  });
+
+  it("adds labels by type id", async () => {
+    mockClient.addLabels.mockResolvedValue({ data: [], error: null });
+
+    const res = await updateThreadLabels({ threadId: "th_1", add: ["lt_1", "lt_2"] });
+
+    expect(res).toEqual({ success: true, added: 2, removed: 0 });
+    expect(mockClient.addLabels).toHaveBeenCalledWith({ threadId: "th_1", labelTypeIds: ["lt_1", "lt_2"] });
+  });
+
+  it("resolves type ids to applied label instance ids before removing", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { thread: { labels: [
+        { id: "lbl_a", labelType: { id: "lt_1" } },
+        { id: "lbl_b", labelType: { id: "lt_other" } },
+      ] } },
+      error: null,
+    });
+    mockClient.removeLabels.mockResolvedValue({ data: null, error: null });
+
+    const res = await updateThreadLabels({ threadId: "th_1", remove: ["lt_1"] });
+
+    expect(res).toEqual({ success: true, added: 0, removed: 1 });
+    expect(mockClient.removeLabels).toHaveBeenCalledWith({ labelIds: ["lbl_a"] });
+  });
+
+  it("ignores remove type ids that are not applied", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { thread: { labels: [{ id: "lbl_a", labelType: { id: "lt_1" } }] } },
+      error: null,
+    });
+
+    const res = await updateThreadLabels({ threadId: "th_1", remove: ["lt_not_applied"] });
+
+    expect(res).toEqual({ success: true, added: 0, removed: 0 });
+    expect(mockClient.removeLabels).not.toHaveBeenCalled();
   });
 });

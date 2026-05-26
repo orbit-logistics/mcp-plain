@@ -12,6 +12,9 @@ import {
   type GetAttachmentDownloadUrlInput,
   type GetAttachmentContentInput,
   type UpsertThreadFieldInput,
+  type UpdateThreadFieldsInput,
+  type UpdateThreadPriorityInput,
+  type UpdateThreadLabelsInput,
   type AddInternalNoteInput,
   type AddLabelsInput,
   type GetLabelTypesInput,
@@ -57,6 +60,7 @@ const THREAD_QUERY = `
         externalId
       }
       labels {
+        id
         labelType {
           id
           name
@@ -190,6 +194,7 @@ const THREAD_BY_REF_QUERY = `
         externalId
       }
       labels {
+        id
         labelType {
           id
           name
@@ -429,10 +434,11 @@ const extractCustomerInfo = (customer: {
  * Extract labels from Plain's label array
  */
 const extractLabels = (
-  labels: Array<{ labelType: { id: string; name: string } }>
+  labels: Array<{ id?: string; labelType: { id: string; name: string } }>
 ): ThreadLabel[] =>
   labels.map((l) => ({
     id: l.labelType.id,
+    labelId: l.id,
     name: l.labelType.name,
   }));
 
@@ -723,7 +729,7 @@ interface RawThread {
     email: { email: string } | null;
     externalId: string | null;
   } | null;
-  labels: Array<{ labelType: { id: string; name: string } }>;
+  labels: Array<{ id?: string; labelType: { id: string; name: string } }>;
   threadFields: Array<{ key: string; stringValue?: string | null; booleanValue?: boolean | null }>;
   createdAt: { iso8601: string };
   updatedAt: { iso8601: string };
@@ -1113,26 +1119,34 @@ const inferFieldType = (key: string, override?: string): ThreadFieldType => {
   return "STRING";
 };
 
-/**
- * Set or update a custom field value on a thread.
- * Uses Plain's upsertThreadField GraphQL mutation.
- */
-export const upsertThreadField = async (
-  input: UpsertThreadFieldInput
-): Promise<{ success: true; key: string; value: string; type: ThreadFieldType; result?: string }> => {
-  const client = getPlainClient();
+interface FieldWriteResult {
+  key: string;
+  value: string;
+  type: ThreadFieldType;
+  result?: string;
+}
 
-  const type = inferFieldType(input.key, input.type);
+/**
+ * Write a single custom field via Plain's upsertThreadField mutation. Shared by
+ * the single-field upsert_thread_field tool and the batch update_thread_fields
+ * tool. Throws with a formatted error on failure.
+ */
+const upsertOneField = async (
+  client: ReturnType<typeof getPlainClient>,
+  threadId: string,
+  key: string,
+  value: string,
+  typeOverride?: string
+): Promise<FieldWriteResult> => {
+  const type = inferFieldType(key, typeOverride);
   const valueField =
-    type === "BOOL"
-      ? { booleanValue: input.value === "true" }
-      : { stringValue: input.value };
+    type === "BOOL" ? { booleanValue: value === "true" } : { stringValue: value };
 
   const result = await client.rawRequest({
     query: UPSERT_THREAD_FIELD_MUTATION,
     variables: {
       input: {
-        identifier: { threadId: input.threadId, key: input.key },
+        identifier: { threadId, key },
         type,
         ...valueField,
       },
@@ -1140,23 +1154,139 @@ export const upsertThreadField = async (
   });
 
   if (result.error) {
-    throw new Error(`Failed to upsert thread field: ${formatPlainError(result.error)}`);
+    throw new Error(`Failed to upsert thread field '${key}': ${formatPlainError(result.error)}`);
   }
 
   const data = result.data as RawUpsertThreadFieldResponse;
   const response = data.upsertThreadField;
 
   if (response.error) {
-    throw new Error(`Failed to upsert thread field: ${formatPlainError(response.error)}`);
+    throw new Error(`Failed to upsert thread field '${key}': ${formatPlainError(response.error)}`);
   }
 
-  return {
-    success: true,
-    key: input.key,
-    value: input.value,
-    type,
-    result: response.result ?? undefined,
-  };
+  return { key, value, type, result: response.result ?? undefined };
+};
+
+/**
+ * Set or update a single custom field value on a thread.
+ * Uses Plain's upsertThreadField GraphQL mutation.
+ */
+export const upsertThreadField = async (
+  input: UpsertThreadFieldInput
+): Promise<{ success: true } & FieldWriteResult> => {
+  const client = getPlainClient();
+  const written = await upsertOneField(client, input.threadId, input.key, input.value, input.type);
+  return { success: true, ...written };
+};
+
+/**
+ * Set or update multiple custom fields on a thread in one call. Each key must
+ * be allowlisted (present in FIELD_KEY_MAP); unknown keys are rejected before
+ * any write happens so the call is all-or-nothing on validation. Writes are
+ * applied sequentially (Plain has no batch field mutation).
+ */
+export const updateThreadFields = async (
+  input: UpdateThreadFieldsInput
+): Promise<{ success: true; updated: FieldWriteResult[] }> => {
+  const client = getPlainClient();
+
+  const unknown = input.fields.map((f) => f.key).filter((k) => !(k in FIELD_KEY_MAP));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown custom field key(s): ${unknown.join(", ")}. Allowed keys: ${Object.keys(FIELD_KEY_MAP).join(", ")}.`
+    );
+  }
+
+  const updated: FieldWriteResult[] = [];
+  for (const field of input.fields) {
+    updated.push(await upsertOneField(client, input.threadId, field.key, field.value, field.type));
+  }
+
+  return { success: true, updated };
+};
+
+/**
+ * Set a thread's priority (0 = Urgent, 1 = High, 2 = Normal, 3 = Low).
+ */
+export const updateThreadPriority = async (
+  input: UpdateThreadPriorityInput
+): Promise<{ success: true; threadId: string; priority: number }> => {
+  const client = getPlainClient();
+
+  const result = await client.changeThreadPriority({
+    threadId: input.threadId,
+    priority: input.priority,
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to update thread priority: ${formatPlainError(result.error)}`);
+  }
+
+  return { success: true, threadId: input.threadId, priority: input.priority };
+};
+
+const THREAD_LABELS_QUERY = `
+  query GetThreadLabels($threadId: ID!) {
+    thread(threadId: $threadId) {
+      labels {
+        id
+        labelType { id }
+      }
+    }
+  }
+`;
+
+/**
+ * Add and/or remove labels on a thread. `add` and `remove` both take label
+ * TYPE ids. Removal resolves each type id to the applied label's instance id
+ * (via a thread read) because Plain's removeLabels mutation operates on label
+ * instance ids, not type ids. Type ids not currently applied are ignored.
+ */
+export const updateThreadLabels = async (
+  input: UpdateThreadLabelsInput
+): Promise<{ success: true; added: number; removed: number }> => {
+  const client = getPlainClient();
+
+  let added = 0;
+  let removed = 0;
+
+  if (input.add && input.add.length > 0) {
+    const addResult = await client.addLabels({
+      threadId: input.threadId,
+      labelTypeIds: input.add,
+    });
+    if (addResult.error) {
+      throw new Error(`Failed to add labels: ${formatPlainError(addResult.error)}`);
+    }
+    added = input.add.length;
+  }
+
+  if (input.remove && input.remove.length > 0) {
+    const lookup = await client.rawRequest({
+      query: THREAD_LABELS_QUERY,
+      variables: { threadId: input.threadId },
+    });
+    if (lookup.error) {
+      throw new Error(`Failed to look up thread labels: ${formatPlainError(lookup.error)}`);
+    }
+    const lookupData = lookup.data as {
+      thread?: { labels?: Array<{ id: string; labelType: { id: string } }> } | null;
+    };
+    const removeSet = new Set(input.remove);
+    const labelIds = (lookupData.thread?.labels ?? [])
+      .filter((l) => removeSet.has(l.labelType.id))
+      .map((l) => l.id);
+
+    if (labelIds.length > 0) {
+      const removeResult = await client.removeLabels({ labelIds });
+      if (removeResult.error) {
+        throw new Error(`Failed to remove labels: ${formatPlainError(removeResult.error)}`);
+      }
+      removed = labelIds.length;
+    }
+  }
+
+  return { success: true, added, removed };
 };
 
 /**

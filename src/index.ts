@@ -5,7 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { listThreads, getThread, getThreadByRef, getThreadFields, getAttachmentDownloadUrl, getAttachmentContent, replyToThread, markThreadAsDone, upsertThreadField, addInternalNote, addLabelsToThread, getLabelTypes, createThread } from "./tools/threads.js";
+import { listThreads, getThread, getThreadByRef, getThreadFields, getAttachmentDownloadUrl, getAttachmentContent, replyToThread, markThreadAsDone, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels, addInternalNote, addLabelsToThread, getLabelTypes, createThread } from "./tools/threads.js";
 import { listHelpCenters, getHelpCenter, listHelpCenterArticles, getHelpCenterArticle, getHelpCenterArticleBySlug, upsertHelpCenterArticle, createHelpCenterArticleGroup, deleteHelpCenterArticleGroup } from "./tools/helpCenter.js";
 import {
   listThreadsInputSchema,
@@ -19,6 +19,9 @@ import {
   replyToThreadInputSchema,
   markThreadAsDoneInputSchema,
   addLabelsInputSchema,
+  updateThreadPriorityInputSchema,
+  updateThreadLabelsInputSchema,
+  updateThreadFieldsInputSchema,
   getLabelTypesInputSchema,
   createThreadInputSchema,
   listHelpCentersInputSchema,
@@ -275,7 +278,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "add_labels",
       description:
-        "Add category labels to a thread. Use get_label_types first to discover available label type IDs for bug, support, feature-request, sales categories.",
+        "Add category labels to a thread. Use get_label_types first to discover available label type IDs for bug, support, feature-request, sales categories. (Prefer update_thread_labels for combined add/remove.)",
       inputSchema: {
         type: "object",
         properties: {
@@ -291,6 +294,91 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ["threadId", "labelTypeIds"],
+      },
+    },
+    {
+      name: "update_thread_labels",
+      description:
+        "Add and/or remove category labels on a thread in one call. Both 'add' and 'remove' take label TYPE IDs (from get_label_types); removal resolves each type to the applied label automatically. Type IDs not currently on the thread are ignored.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "The ID of the thread to update",
+          },
+          add: {
+            type: "array",
+            items: { type: "string" },
+            description: "Label type IDs to add (get IDs from get_label_types)",
+          },
+          remove: {
+            type: "array",
+            items: { type: "string" },
+            description: "Label type IDs to remove",
+          },
+        },
+        required: ["threadId"],
+      },
+    },
+    {
+      name: "update_thread_priority",
+      description:
+        "Set a thread's priority. Plain priority is an integer: 0 = Urgent, 1 = High, 2 = Normal, 3 = Low.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "The ID of the thread to update",
+          },
+          priority: {
+            type: "number",
+            minimum: 0,
+            maximum: 3,
+            description: "0 = Urgent, 1 = High, 2 = Normal, 3 = Low",
+          },
+        },
+        required: ["threadId", "priority"],
+      },
+    },
+    {
+      name: "update_thread_fields",
+      description:
+        "Set or update multiple custom fields on a thread in one call. Each field key must be an allowlisted snake_case key (e.g. impact_level, agent_readiness, request_feature, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from); unknown keys are rejected. Field type (BOOL/ENUM/STRING) is auto-detected per key.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "The ID of the thread to update",
+          },
+          fields: {
+            type: "array",
+            minItems: 1,
+            description: "One or more custom field writes to apply",
+            items: {
+              type: "object",
+              properties: {
+                key: {
+                  type: "string",
+                  description: "Allowlisted custom field key in snake_case",
+                },
+                value: {
+                  type: "string",
+                  description: "Field value. For boolean fields use 'true' or 'false'.",
+                },
+                type: {
+                  type: "string",
+                  enum: ["BOOL", "ENUM", "STRING"],
+                  description: "Optional schema type override; auto-detected from key if omitted.",
+                },
+              },
+              required: ["key", "value"],
+            },
+          },
+        },
+        required: ["threadId", "fields"],
       },
     },
     {
@@ -667,6 +755,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "add_labels": {
         const input = addLabelsInputSchema.parse(args);
         const result = await addLabelsToThread(input);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "update_thread_labels": {
+        const input = updateThreadLabelsInputSchema.parse(args);
+        const result = await updateThreadLabels(input);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "update_thread_priority": {
+        const input = updateThreadPriorityInputSchema.parse(args);
+        const result = await updateThreadPriority(input);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "update_thread_fields": {
+        const input = updateThreadFieldsInputSchema.parse(args);
+        const result = await updateThreadFields(input);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
