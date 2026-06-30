@@ -75,14 +75,18 @@ export interface ThreadSummary {
 export interface TimelineEntryBase {
   id: string;
   timestamp: string;
-  entryType: "NOTE" | "EMAIL" | "CHAT" | "CUSTOM" | "SLACK" | "DISCUSSION" | "DISCUSSION_MESSAGE" | "DISCUSSION_RESOLVED" | "UNKNOWN";
-}
-
-export interface NoteTimelineEntry extends TimelineEntryBase {
-  entryType: "NOTE";
-  text: string;
-  markdown?: string;
-  createdBy?: { name?: string; email?: string };
+  entryType:
+    | "NOTE"
+    | "EMAIL"
+    | "CHAT"
+    | "CUSTOM"
+    | "SLACK"
+    | "MS_TEAMS"
+    | "DISCORD"
+    | "DISCUSSION"
+    | "DISCUSSION_MESSAGE"
+    | "DISCUSSION_RESOLVED"
+    | "UNKNOWN";
 }
 
 export interface Attachment {
@@ -90,6 +94,16 @@ export interface Attachment {
   fileName: string;
   fileSizeKb?: number;
   mimeType?: string;
+}
+
+export interface NoteTimelineEntry extends TimelineEntryBase {
+  entryType: "NOTE";
+  text: string;
+  markdown?: string;
+  // Files attached to the note (e.g. screenshots). Feed `id` to
+  // get_attachment_content / get_attachment_download_url.
+  attachments?: Attachment[];
+  createdBy?: { name?: string; email?: string };
 }
 
 export interface EmailTimelineEntry extends TimelineEntryBase {
@@ -104,6 +118,7 @@ export interface EmailTimelineEntry extends TimelineEntryBase {
 export interface ChatTimelineEntry extends TimelineEntryBase {
   entryType: "CHAT";
   text: string;
+  attachments?: Attachment[];
   createdBy?: { name?: string; type: "customer" | "user" };
 }
 
@@ -120,6 +135,22 @@ export interface SlackTimelineEntry extends TimelineEntryBase {
   text: string;
   isReply?: boolean;
   slackMessageLink?: string;
+  attachments?: Attachment[];
+  createdBy?: { name?: string };
+}
+
+export interface MSTeamsTimelineEntry extends TimelineEntryBase {
+  entryType: "MS_TEAMS";
+  text: string;
+  messageLink?: string;
+  attachments?: Attachment[];
+  createdBy?: { name?: string };
+}
+
+export interface DiscordTimelineEntry extends TimelineEntryBase {
+  entryType: "DISCORD";
+  text: string;
+  messageLink?: string;
   attachments?: Attachment[];
   createdBy?: { name?: string };
 }
@@ -163,6 +194,8 @@ export type TimelineEntry =
   | ChatTimelineEntry
   | CustomTimelineEntry
   | SlackTimelineEntry
+  | MSTeamsTimelineEntry
+  | DiscordTimelineEntry
   | DiscussionTimelineEntry
   | DiscussionMessageTimelineEntry
   | DiscussionResolvedTimelineEntry

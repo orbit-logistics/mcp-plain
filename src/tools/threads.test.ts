@@ -74,7 +74,10 @@ const createMockChatEntry = () => ({
     },
     entry: {
       __typename: "ChatEntry",
-      text: "Hello, I need help",
+      // ChatEntry.text is aliased to chatText in the GraphQL query (its nullable
+      // String can't merge with the non-null Slack/Teams text fields), so the
+      // raw response surfaces it under chatText.
+      chatText: "Hello, I need help",
     },
   },
 });
@@ -713,6 +716,165 @@ describe("discussion timeline entries", () => {
     expect(result.timeline[2]!.entryType).toBe("DISCUSSION_MESSAGE");
     expect(result.timeline[3]!.entryType).toBe("DISCUSSION_RESOLVED");
     expect(result.timeline[4]!.entryType).toBe("CHAT");
+  });
+});
+
+describe("timeline attachments", () => {
+  let mockClient: { rawRequest: Mock };
+
+  const mockAttachment = {
+    id: "att_01KWCCQ9CE16FC67RZ8P51DR96",
+    fileName: "image_(2).png",
+    fileSize: { kiloBytes: 370.46 },
+    fileMimeType: "image/png",
+  };
+
+  const noteWithAttachment = () => ({
+    node: {
+      id: "entry_note_att",
+      timestamp: { iso8601: "2024-01-01T10:00:00Z" },
+      actor: { __typename: "UserActor", user: { fullName: "Kevin" } },
+      entry: {
+        __typename: "NoteEntry",
+        markdown: "screenshot from kevin",
+        attachments: [mockAttachment],
+      },
+    },
+  });
+
+  const chatWithAttachment = () => ({
+    node: {
+      id: "entry_chat_att",
+      timestamp: { iso8601: "2024-01-01T12:00:00Z" },
+      actor: { __typename: "CustomerActor", customer: { fullName: "Test Customer" } },
+      entry: {
+        __typename: "ChatEntry",
+        chatText: "here is a screenshot",
+        attachments: [mockAttachment],
+      },
+    },
+  });
+
+  const msTeamsEntry = () => ({
+    node: {
+      id: "entry_teams",
+      timestamp: { iso8601: "2024-01-01T13:00:00Z" },
+      actor: { __typename: "CustomerActor", customer: { fullName: "Teams User" } },
+      entry: {
+        __typename: "MSTeamsMessageEntry",
+        text: "plain text",
+        markdownContent: "**rich** message",
+        msTeamsMessageLink: "https://teams.microsoft.com/l/message/123",
+        attachments: [mockAttachment],
+      },
+    },
+  });
+
+  const discordEntry = () => ({
+    node: {
+      id: "entry_discord",
+      timestamp: { iso8601: "2024-01-01T14:00:00Z" },
+      actor: { __typename: "CustomerActor", customer: { fullName: "Discord User" } },
+      entry: {
+        __typename: "DiscordMessageEntry",
+        markdownContent: "hello from discord",
+        discordMessageLink: "https://discord.com/channels/1/2/3",
+        attachments: [mockAttachment],
+      },
+    },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient = { rawRequest: vi.fn() };
+    (getPlainClient as Mock).mockReturnValue(mockClient);
+  });
+
+  it("exposes attachment ids on note entries so they can feed get_attachment_content", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { thread: createMockThread({ timelineEntries: { edges: [noteWithAttachment()] } }) },
+      error: null,
+    });
+
+    const result = await getThread({ threadId: "thread_123" });
+
+    const entry = result.timeline[0]!;
+    expect(entry.entryType).toBe("NOTE");
+    if (entry.entryType === "NOTE") {
+      expect(entry.text).toBe("screenshot from kevin");
+      expect(entry.attachments).toHaveLength(1);
+      expect(entry.attachments![0]).toEqual({
+        id: "att_01KWCCQ9CE16FC67RZ8P51DR96",
+        fileName: "image_(2).png",
+        fileSizeKb: 370.46,
+        mimeType: "image/png",
+      });
+    }
+  });
+
+  it("leaves attachments undefined on notes without files", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { thread: createMockThread({ timelineEntries: { edges: [createMockNoteEntry()] } }) },
+      error: null,
+    });
+
+    const result = await getThread({ threadId: "thread_123" });
+
+    const entry = result.timeline[0]!;
+    expect(entry.entryType).toBe("NOTE");
+    if (entry.entryType === "NOTE") {
+      expect(entry.attachments).toBeUndefined();
+    }
+  });
+
+  it("reads chat text from the chatText alias and exposes chat attachments", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { thread: createMockThread({ timelineEntries: { edges: [chatWithAttachment()] } }) },
+      error: null,
+    });
+
+    const result = await getThread({ threadId: "thread_123" });
+
+    const entry = result.timeline[0]!;
+    expect(entry.entryType).toBe("CHAT");
+    if (entry.entryType === "CHAT") {
+      expect(entry.text).toBe("here is a screenshot");
+      expect(entry.attachments?.[0]?.id).toBe("att_01KWCCQ9CE16FC67RZ8P51DR96");
+    }
+  });
+
+  it("parses MS Teams messages instead of falling through to UNKNOWN", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { thread: createMockThread({ timelineEntries: { edges: [msTeamsEntry()] } }) },
+      error: null,
+    });
+
+    const result = await getThread({ threadId: "thread_123" });
+
+    const entry = result.timeline[0]!;
+    expect(entry.entryType).toBe("MS_TEAMS");
+    if (entry.entryType === "MS_TEAMS") {
+      expect(entry.text).toBe("**rich** message");
+      expect(entry.messageLink).toBe("https://teams.microsoft.com/l/message/123");
+      expect(entry.attachments?.[0]?.id).toBe("att_01KWCCQ9CE16FC67RZ8P51DR96");
+    }
+  });
+
+  it("parses Discord messages instead of falling through to UNKNOWN", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { thread: createMockThread({ timelineEntries: { edges: [discordEntry()] } }) },
+      error: null,
+    });
+
+    const result = await getThread({ threadId: "thread_123" });
+
+    const entry = result.timeline[0]!;
+    expect(entry.entryType).toBe("DISCORD");
+    if (entry.entryType === "DISCORD") {
+      expect(entry.text).toBe("hello from discord");
+      expect(entry.messageLink).toBe("https://discord.com/channels/1/2/3");
+      expect(entry.attachments?.[0]?.id).toBe("att_01KWCCQ9CE16FC67RZ8P51DR96");
+    }
   });
 });
 

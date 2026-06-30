@@ -105,7 +105,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "get_thread",
       description:
-        "Get full details of a specific thread including basic info, customer, labels, custom fields, and timeline entries.",
+        "Get full details of a specific thread including basic info, customer, labels, custom fields, and timeline entries. Timeline entries that carry files (notes, chats, emails, Slack/Teams/Discord messages, custom entries) include an `attachments` array; pass an attachment's `id` to get_attachment_content or get_attachment_download_url to retrieve the file.",
       inputSchema: {
         type: "object",
         properties: {

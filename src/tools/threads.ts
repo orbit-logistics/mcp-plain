@@ -42,135 +42,162 @@ import {
 } from "../types.js";
 
 /**
+ * Shared attachment selection. Every entry type that can carry attachments
+ * selects this identical shape so the GraphQL field-merge rules are satisfied
+ * and parseAttachments() can read every entry uniformly.
+ */
+const ATTACHMENT_FIELDS = `
+  attachments {
+    id
+    fileName
+    fileSize { kiloBytes }
+    fileMimeType
+  }
+`;
+
+/**
+ * Shared selection set for a thread and its timeline. Used by both the
+ * by-id and by-ref queries so the two can never drift (a past source of
+ * missing fields). The only difference between the two queries is the root
+ * field, so everything below the root is defined once here.
+ *
+ * Notes on entry coverage:
+ * - NoteEntry selects `attachments` — internal notes routinely carry uploaded
+ *   files (e.g. screenshots) and the attachment id is required to feed
+ *   get_attachment_content. Without this, notes came back with no attachment.
+ * - ChatEntry / MSTeamsMessageEntry / DiscordMessageEntry are the inbound
+ *   "original message" entries for the chat, MS Teams and Discord channels.
+ *   Without their fragments they fell through to the UNKNOWN branch with no
+ *   payload, so their attachments were unreachable.
+ * - ChatEntry.text is nullable (String) while the Slack/Teams text fields are
+ *   non-null (String!). GraphQL refuses to merge same-named fields of differing
+ *   nullability across fragments, so ChatEntry's text is aliased to `chatText`.
+ */
+const THREAD_TIMELINE_SELECTION = `
+  id
+  externalId
+  title
+  previewText
+  status
+  priority
+  customer {
+    id
+    fullName
+    email { email }
+    externalId
+  }
+  labels {
+    id
+    labelType {
+      id
+      name
+    }
+  }
+  threadFields {
+    key
+    stringValue
+    booleanValue
+  }
+  createdAt { iso8601 }
+  updatedAt { iso8601 }
+  timelineEntries(first: 50) {
+    edges {
+      node {
+        id
+        timestamp { iso8601 }
+        actor {
+          __typename
+          ... on UserActor { user { fullName } }
+          ... on CustomerActor { customer { fullName } }
+          ... on MachineUserActor { machineUser { fullName } }
+        }
+        entry {
+          __typename
+          ... on NoteEntry {
+            markdown
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on ChatEntry {
+            chatText: text
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on EmailEntry {
+            subject
+            markdownContent
+            from { email name }
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on CustomEntry {
+            title
+            externalId
+            components {
+              __typename
+              ... on ComponentText {
+                text
+              }
+              ... on ComponentPlainText {
+                plainText
+              }
+            }
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on SlackMessageEntry {
+            text
+            slackMessageLink
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on SlackReplyEntry {
+            text
+            slackMessageLink
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on MSTeamsMessageEntry {
+            text
+            markdownContent
+            msTeamsMessageLink
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on DiscordMessageEntry {
+            markdownContent
+            discordMessageLink
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on ThreadDiscussionEntry {
+            threadDiscussionId
+            discussionType
+            slackChannelName
+            slackMessageLink
+            emailRecipients
+          }
+          ... on ThreadDiscussionMessageEntry {
+            threadDiscussionId
+            threadDiscussionMessageId
+            discussionType
+            text
+            resolvedText
+            slackMessageLink
+            ${ATTACHMENT_FIELDS}
+          }
+          ... on ThreadDiscussionResolvedEntry {
+            threadDiscussionId
+            discussionType
+            resolvedAt { iso8601 }
+            slackChannelName
+            slackMessageLink
+          }
+        }
+      }
+    }
+  }
+`;
+
+/**
  * GraphQL query for fetching a thread by ID with timeline entries
  */
 const THREAD_QUERY = `
   query GetThread($threadId: ID!) {
     thread(threadId: $threadId) {
-      id
-      externalId
-      title
-      previewText
-      status
-      priority
-      customer {
-        id
-        fullName
-        email { email }
-        externalId
-      }
-      labels {
-        id
-        labelType {
-          id
-          name
-        }
-      }
-      threadFields {
-        key
-        stringValue
-        booleanValue
-      }
-      createdAt { iso8601 }
-      updatedAt { iso8601 }
-      timelineEntries(first: 50) {
-        edges {
-          node {
-            id
-            timestamp { iso8601 }
-            actor {
-              __typename
-              ... on UserActor { user { fullName } }
-              ... on CustomerActor { customer { fullName } }
-              ... on MachineUserActor { machineUser { fullName } }
-            }
-            entry {
-              __typename
-              ... on NoteEntry {
-                markdown
-              }
-              ... on EmailEntry {
-                subject
-                markdownContent
-                from { email name }
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on CustomEntry {
-                title
-                externalId
-                components {
-                  __typename
-                  ... on ComponentText {
-                    text
-                  }
-                  ... on ComponentPlainText {
-                    plainText
-                  }
-                }
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on SlackMessageEntry {
-                text
-                slackMessageLink
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on SlackReplyEntry {
-                text
-                slackMessageLink
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on ThreadDiscussionEntry {
-                threadDiscussionId
-                discussionType
-                slackChannelName
-                slackMessageLink
-                emailRecipients
-              }
-              ... on ThreadDiscussionMessageEntry {
-                threadDiscussionId
-                threadDiscussionMessageId
-                discussionType
-                text
-                resolvedText
-                slackMessageLink
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on ThreadDiscussionResolvedEntry {
-                threadDiscussionId
-                discussionType
-                resolvedAt { iso8601 }
-                slackChannelName
-                slackMessageLink
-              }
-            }
-          }
-        }
-      }
+      ${THREAD_TIMELINE_SELECTION}
     }
   }
 `;
@@ -181,130 +208,7 @@ const THREAD_QUERY = `
 const THREAD_BY_REF_QUERY = `
   query GetThreadByRef($ref: String!) {
     threadByRef(ref: $ref) {
-      id
-      externalId
-      title
-      previewText
-      status
-      priority
-      customer {
-        id
-        fullName
-        email { email }
-        externalId
-      }
-      labels {
-        id
-        labelType {
-          id
-          name
-        }
-      }
-      threadFields {
-        key
-        stringValue
-        booleanValue
-      }
-      createdAt { iso8601 }
-      updatedAt { iso8601 }
-      timelineEntries(first: 50) {
-        edges {
-          node {
-            id
-            timestamp { iso8601 }
-            actor {
-              __typename
-              ... on UserActor { user { fullName } }
-              ... on CustomerActor { customer { fullName } }
-              ... on MachineUserActor { machineUser { fullName } }
-            }
-            entry {
-              __typename
-              ... on NoteEntry {
-                markdown
-              }
-              ... on EmailEntry {
-                subject
-                markdownContent
-                from { email name }
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on CustomEntry {
-                title
-                externalId
-                components {
-                  __typename
-                  ... on ComponentText {
-                    text
-                  }
-                  ... on ComponentPlainText {
-                    plainText
-                  }
-                }
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on SlackMessageEntry {
-                text
-                slackMessageLink
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on SlackReplyEntry {
-                text
-                slackMessageLink
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on ThreadDiscussionEntry {
-                threadDiscussionId
-                discussionType
-                slackChannelName
-                slackMessageLink
-                emailRecipients
-              }
-              ... on ThreadDiscussionMessageEntry {
-                threadDiscussionId
-                threadDiscussionMessageId
-                discussionType
-                text
-                resolvedText
-                slackMessageLink
-                attachments {
-                  id
-                  fileName
-                  fileSize { kiloBytes }
-                  fileMimeType
-                }
-              }
-              ... on ThreadDiscussionResolvedEntry {
-                threadDiscussionId
-                discussionType
-                resolvedAt { iso8601 }
-                slackChannelName
-                slackMessageLink
-              }
-            }
-          }
-        }
-      }
+      ${THREAD_TIMELINE_SELECTION}
     }
   }
 `;
@@ -457,6 +361,9 @@ interface RawTimelineEntry {
   entry: {
     __typename: string;
     text?: string | null;
+    // ChatEntry.text is aliased to chatText in the query because its nullable
+    // String type can't be merged with the non-null Slack/Teams text fields.
+    chatText?: string | null;
     markdown?: string | null;
     subject?: string | null;
     textContent?: string | null;
@@ -465,6 +372,8 @@ interface RawTimelineEntry {
     externalId?: string | null;
     from?: { email: string; name?: string | null } | null;
     slackMessageLink?: string | null;
+    msTeamsMessageLink?: string | null;
+    discordMessageLink?: string | null;
     components?: Array<{
       __typename: string;
       text?: string | null;
@@ -535,6 +444,7 @@ const parseTimelineEntry = (node: RawTimelineEntry): TimelineEntry => {
         entryType: "NOTE" as const,
         text: entry.text || entry.markdown || "",  // fallback to markdown if text is empty
         markdown: entry.markdown ?? undefined,
+        attachments: parseAttachments(entry.attachments),
         createdBy: actor ? { name: extractActorName(actor) } : undefined,
       };
     case "EmailEntry":
@@ -550,7 +460,8 @@ const parseTimelineEntry = (node: RawTimelineEntry): TimelineEntry => {
       return {
         ...baseEntry,
         entryType: "CHAT" as const,
-        text: entry.text ?? "",
+        text: entry.chatText ?? entry.text ?? "",
+        attachments: parseAttachments(entry.attachments),
         createdBy: actor
           ? {
               name: extractActorName(actor),
@@ -591,6 +502,24 @@ const parseTimelineEntry = (node: RawTimelineEntry): TimelineEntry => {
         text: entry.text ?? "",
         isReply: true,
         slackMessageLink: entry.slackMessageLink ?? undefined,
+        attachments: parseAttachments(entry.attachments),
+        createdBy: actor ? { name: extractActorName(actor) } : undefined,
+      };
+    case "MSTeamsMessageEntry":
+      return {
+        ...baseEntry,
+        entryType: "MS_TEAMS" as const,
+        text: entry.markdownContent || entry.text || "",
+        messageLink: entry.msTeamsMessageLink ?? undefined,
+        attachments: parseAttachments(entry.attachments),
+        createdBy: actor ? { name: extractActorName(actor) } : undefined,
+      };
+    case "DiscordMessageEntry":
+      return {
+        ...baseEntry,
+        entryType: "DISCORD" as const,
+        text: entry.markdownContent ?? "",
+        messageLink: entry.discordMessageLink ?? undefined,
         attachments: parseAttachments(entry.attachments),
         createdBy: actor ? { name: extractActorName(actor) } : undefined,
       };
