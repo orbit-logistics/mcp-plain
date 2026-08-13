@@ -201,6 +201,38 @@ export type TimelineEntry =
   | DiscussionResolvedTimelineEntry
   | UnknownTimelineEntry;
 
+// A link attached to a thread. Plain models links as an interface with one
+// concrete type per target: another Plain thread, a Linear issue, a Jira
+// issue, or a generic external resource. The shared fields are always
+// present; the target-specific ids are set only for their own type.
+export interface ThreadLinkInfo {
+  // The link's own id. Pass this to unlink_thread to remove the link.
+  id: string;
+  // Plain's concrete link type, e.g. PlainThreadThreadLink,
+  // LinearIssueThreadLink, JiraIssueThreadLink, GenericThreadLink.
+  type: string;
+  // The thread that owns the link, i.e. the one it was created on. A
+  // thread-to-thread link is one record that both threads show, so read from
+  // the far end this is the other thread and `linkedThreadId` is the thread
+  // you asked for.
+  ownerThreadId: string;
+  title: string;
+  url: string;
+  // TODO | IN_PROGRESS | DONE | UNKNOWN — the state of the linked entity.
+  status: string;
+  sourceType: string;
+  sourceId: string;
+  description?: string;
+  // Set on PlainThreadThreadLink: the id of the thread on the other end.
+  linkedThreadId?: string;
+  linearIssueId?: string;
+  linearIssueIdentifier?: string;
+  jiraIssueId?: string;
+  jiraIssueKey?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Full thread details
 export interface ThreadDetails extends ThreadSummary {
   description?: string;
@@ -210,6 +242,7 @@ export interface ThreadDetails extends ThreadSummary {
   // field on the thread, not just the ones mapped into `customFields`. Use
   // this when reading fields the typed shape doesn't model yet.
   customFieldsRaw: Record<string, string | boolean>;
+  links: ThreadLinkInfo[];
   timeline: TimelineEntry[];
 }
 
@@ -397,6 +430,63 @@ export const updateThreadFieldsInputSchema = z.object({
     .describe("One or more custom field writes to apply to the thread."),
 });
 
+// Link a thread to another Plain thread, a Linear issue, a Jira issue, or a
+// generic external resource. Identify the thread that receives the link with
+// threadId or threadRef, and give exactly one link target. The "exactly one"
+// rules are enforced in linkThreads() so the error messages stay readable.
+export const linkThreadsInputSchema = z.object({
+  threadId: z
+    .string()
+    .optional()
+    .describe("ID of the thread the link is created on. Provide threadId or threadRef."),
+  threadRef: z
+    .string()
+    .optional()
+    .describe("Reference of the thread the link is created on, e.g. 'T-510'. Provide threadId or threadRef."),
+  linkedThreadId: z
+    .string()
+    .optional()
+    .describe("ID of the Plain thread to link to. Provide linkedThreadId or linkedThreadRef."),
+  linkedThreadRef: z
+    .string()
+    .optional()
+    .describe("Reference of the Plain thread to link to, e.g. 'T-511'."),
+  linearIssueId: z
+    .string()
+    .optional()
+    .describe("Linear issue ID to link to. Requires linearIssueUrl."),
+  linearIssueUrl: z
+    .string()
+    .optional()
+    .describe("Linear issue URL. Requires linearIssueId."),
+  jiraIssueId: z.string().optional().describe("Jira issue ID to link to."),
+  sourceType: z
+    .string()
+    .optional()
+    .describe("Generic link source type (a link source configured in the Plain workspace). Requires sourceId."),
+  sourceId: z
+    .string()
+    .optional()
+    .describe("Generic link source ID within sourceType. Requires sourceType."),
+});
+
+export const getThreadLinksInputSchema = z.object({
+  threadId: z.string().optional().describe("ID of the thread to read links from. Provide threadId or ref."),
+  ref: z.string().optional().describe("Reference of the thread to read links from, e.g. 'T-510'."),
+  first: z
+    .number()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Number of links to return (default 25, max 100)"),
+});
+
+export const unlinkThreadInputSchema = z.object({
+  threadLinkId: z
+    .string()
+    .describe("ID of the link to remove. Read it from the `links` array on get_thread or get_thread_links."),
+});
+
 export const getLabelTypesInputSchema = z.object({
   first: z
     .number()
@@ -571,4 +661,7 @@ export type UpdateThreadPriorityInput = z.infer<typeof updateThreadPriorityInput
 export type UpdateThreadLabelsInput = z.infer<typeof updateThreadLabelsInputSchema>;
 export type UpdateThreadFieldsInput = z.infer<typeof updateThreadFieldsInputSchema>;
 export type GetLabelTypesInput = z.infer<typeof getLabelTypesInputSchema>;
+export type LinkThreadsInput = z.infer<typeof linkThreadsInputSchema>;
+export type GetThreadLinksInput = z.infer<typeof getThreadLinksInputSchema>;
+export type UnlinkThreadInput = z.infer<typeof unlinkThreadInputSchema>;
 export type CreateThreadInput = z.infer<typeof createThreadInputSchema>;

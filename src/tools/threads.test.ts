@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { ThreadStatus } from "@team-plain/typescript-sdk";
-import { listThreads, getThread, getThreadByRef, getThreadFields, replyToThread, markThreadAsDone, createThread, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels } from "./threads.js";
+import { listThreads, getThread, getThreadByRef, getThreadFields, replyToThread, markThreadAsDone, createThread, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels, linkThreads, getThreadLinks, unlinkThread } from "./threads.js";
 import { getPlainClient } from "../client.js";
 
 // Mock the client module
@@ -1533,5 +1533,247 @@ describe("updateThreadLabels", () => {
 
     expect(res).toEqual({ success: true, added: 0, removed: 0 });
     expect(mockClient.removeLabels).not.toHaveBeenCalled();
+  });
+});
+
+describe("thread links", () => {
+  let mockClient: { rawRequest: Mock };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient = { rawRequest: vi.fn() };
+    (getPlainClient as Mock).mockReturnValue(mockClient);
+  });
+
+  const mockPlainLink = (overrides: Record<string, unknown> = {}) => ({
+    __typename: "PlainThreadThreadLink",
+    id: "tl_1",
+    threadId: "th_1",
+    title: "Duplicate report",
+    url: "https://app.plain.com/thread/th_2",
+    status: "TODO",
+    sourceType: "plain",
+    sourceId: "th_2",
+    description: null,
+    createdAt: { iso8601: "2024-01-01T00:00:00Z" },
+    updatedAt: { iso8601: "2024-01-01T00:00:00Z" },
+    plainThreadId: "th_2",
+    ...overrides,
+  });
+
+  const createOk = (link: Record<string, unknown>) => ({
+    data: { createThreadLink: { threadLink: link, error: null } },
+    error: null,
+  });
+
+  it("links two Plain threads and returns the parsed link", async () => {
+    mockClient.rawRequest.mockResolvedValue(createOk(mockPlainLink()));
+
+    const res = await linkThreads({ threadId: "th_1", linkedThreadId: "th_2" });
+
+    expect(res.success).toBe(true);
+    expect(res.threadId).toBe("th_1");
+    expect(res.threadLink).toMatchObject({
+      id: "tl_1",
+      type: "PlainThreadThreadLink",
+      ownerThreadId: "th_1",
+      linkedThreadId: "th_2",
+      status: "TODO",
+    });
+    const call = mockClient.rawRequest.mock.calls[0]![0];
+    expect(call.variables.input).toEqual({
+      threadId: "th_1",
+      plainThread: { plainThreadId: "th_2" },
+    });
+  });
+
+  it("resolves both sides from refs before creating the link", async () => {
+    mockClient.rawRequest
+      .mockResolvedValueOnce({ data: { threadByRef: { id: "th_1" } }, error: null })
+      .mockResolvedValueOnce({ data: { threadByRef: { id: "th_2" } }, error: null })
+      .mockResolvedValueOnce(createOk(mockPlainLink()));
+
+    const res = await linkThreads({ threadRef: "T-510", linkedThreadRef: "T-511" });
+
+    expect(res.threadId).toBe("th_1");
+    const mutation = mockClient.rawRequest.mock.calls[2]![0];
+    expect(mutation.variables.input).toEqual({
+      threadId: "th_1",
+      plainThread: { plainThreadId: "th_2" },
+    });
+  });
+
+  it("sends the linearIssue shape for Linear targets", async () => {
+    mockClient.rawRequest.mockResolvedValue(
+      createOk(
+        mockPlainLink({
+          __typename: "LinearIssueThreadLink",
+          plainThreadId: null,
+          linearIssueId: "lin_1",
+          linearIssueIdentifier: "ORB-42",
+        })
+      )
+    );
+
+    const res = await linkThreads({
+      threadId: "th_1",
+      linearIssueId: "lin_1",
+      linearIssueUrl: "https://linear.app/orbit/issue/ORB-42",
+    });
+
+    expect(res.threadLink.linearIssueIdentifier).toBe("ORB-42");
+    expect(res.threadLink.linkedThreadId).toBeUndefined();
+    const call = mockClient.rawRequest.mock.calls[0]![0];
+    expect(call.variables.input).toEqual({
+      threadId: "th_1",
+      linearIssue: { linearIssueId: "lin_1", linearIssueUrl: "https://linear.app/orbit/issue/ORB-42" },
+    });
+  });
+
+  it("rejects a call with no link target", async () => {
+    await expect(linkThreads({ threadId: "th_1" })).rejects.toThrow("Provide a link target");
+    expect(mockClient.rawRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects more than one link target", async () => {
+    await expect(
+      linkThreads({ threadId: "th_1", linkedThreadId: "th_2", jiraIssueId: "jira_1" })
+    ).rejects.toThrow("only one link target");
+  });
+
+  it("rejects a Linear target missing its url", async () => {
+    await expect(linkThreads({ threadId: "th_1", linearIssueId: "lin_1" })).rejects.toThrow(
+      "linearIssueId and linearIssueUrl"
+    );
+  });
+
+  it("rejects linking a thread to itself", async () => {
+    await expect(linkThreads({ threadId: "th_1", linkedThreadId: "th_1" })).rejects.toThrow(
+      "cannot be linked to itself"
+    );
+    expect(mockClient.rawRequest).not.toHaveBeenCalled();
+  });
+
+  it("surfaces mutation errors from createThreadLink", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: {
+        createThreadLink: {
+          threadLink: null,
+          error: { message: "Already linked", type: "bad_request", code: "already_exists" },
+        },
+      },
+      error: null,
+    });
+
+    await expect(linkThreads({ threadId: "th_1", linkedThreadId: "th_2" })).rejects.toThrow(
+      "code=already_exists"
+    );
+  });
+
+  it("lists links for a thread", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: {
+        thread: {
+          id: "th_1",
+          links: {
+            edges: [{ node: mockPlainLink() }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+      error: null,
+    });
+
+    const res = await getThreadLinks({ threadId: "th_1" });
+
+    expect(res.threadId).toBe("th_1");
+    expect(res.links).toHaveLength(1);
+    expect(res.links[0]!.linkedThreadId).toBe("th_2");
+    expect(res.hasNextPage).toBe(false);
+    expect(mockClient.rawRequest.mock.calls[0]![0].variables).toEqual({
+      threadId: "th_1",
+      first: 25,
+    });
+  });
+
+  it("reports the owner thread so the far end of a link is resolvable", async () => {
+    // Read from thread th_2, the far end: the same record comes back, with
+    // linkedThreadId pointing at th_2 itself and ownerThreadId at th_1.
+    mockClient.rawRequest.mockResolvedValue({
+      data: {
+        thread: {
+          id: "th_2",
+          links: {
+            edges: [{ node: mockPlainLink() }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+      error: null,
+    });
+
+    const res = await getThreadLinks({ threadId: "th_2" });
+    const link = res.links[0]!;
+    const farEnd = link.linkedThreadId === "th_2" ? link.ownerThreadId : link.linkedThreadId;
+
+    expect(link.ownerThreadId).toBe("th_1");
+    expect(farEnd).toBe("th_1");
+  });
+
+  it("deletes a link by its own id", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { deleteThreadLink: { error: null } },
+      error: null,
+    });
+
+    const res = await unlinkThread({ threadLinkId: "tl_1" });
+
+    expect(res).toEqual({ success: true, threadLinkId: "tl_1" });
+    expect(mockClient.rawRequest.mock.calls[0]![0].variables).toEqual({
+      input: { threadLinkId: "tl_1" },
+    });
+  });
+
+  it("surfaces mutation errors from deleteThreadLink", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: {
+        deleteThreadLink: {
+          error: { message: "Not found", type: "not_found", code: "thread_link_not_found" },
+        },
+      },
+      error: null,
+    });
+
+    await expect(unlinkThread({ threadLinkId: "tl_missing" })).rejects.toThrow(
+      "code=thread_link_not_found"
+    );
+  });
+
+  it("exposes links on getThread", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: {
+        thread: createMockThread({
+          timelineEntries: { edges: [] },
+          links: { edges: [{ node: mockPlainLink() }] },
+        }),
+      },
+      error: null,
+    });
+
+    const result = await getThread({ threadId: "thread_123" });
+
+    expect(result.links).toHaveLength(1);
+    expect(result.links[0]).toMatchObject({ id: "tl_1", linkedThreadId: "th_2" });
+  });
+
+  it("returns an empty links array when a thread has none", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { thread: createMockThread({ timelineEntries: { edges: [] } }) },
+      error: null,
+    });
+
+    const result = await getThread({ threadId: "thread_123" });
+
+    expect(result.links).toEqual([]);
   });
 });

@@ -49,6 +49,13 @@ PLAIN_API_KEY=plainApiKey_xxx npx @orbitlogistics/mcp-plain@latest
 - `add_labels` - Add category labels to a thread
 - `get_label_types` - List available label types
 
+### Thread links
+- `link_threads` - Link a thread to another Plain thread, a Linear issue, a Jira issue, or a generic source
+- `get_thread_links` - List the links on a thread
+- `unlink_thread` - Remove a link by its link ID
+
+`get_thread` and `get_thread_by_ref` also return the first 25 links of a thread in a `links` array.
+
 ### Attachments
 - `get_attachment_download_url` - Get a temporary download URL
 - `get_attachment_content` - Fetch attachment content (text or base64)

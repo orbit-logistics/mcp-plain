@@ -18,6 +18,10 @@ import {
   type AddInternalNoteInput,
   type AddLabelsInput,
   type GetLabelTypesInput,
+  type LinkThreadsInput,
+  type GetThreadLinksInput,
+  type UnlinkThreadInput,
+  type ThreadLinkInfo,
   type ReplyToThreadInput,
   type MarkThreadAsDoneInput,
   type CreateThreadInput,
@@ -52,6 +56,51 @@ const ATTACHMENT_FIELDS = `
     fileName
     fileSize { kiloBytes }
     fileMimeType
+  }
+`;
+
+/**
+ * Shared selection of a thread link. ThreadLink is a GraphQL interface, so the
+ * common fields are selected directly and each concrete type adds its own ids
+ * through an inline fragment.
+ */
+const THREAD_LINK_FIELDS = `
+  __typename
+  id
+  threadId
+  title
+  url
+  status
+  sourceType
+  sourceId
+  description
+  createdAt { iso8601 }
+  updatedAt { iso8601 }
+  ... on PlainThreadThreadLink {
+    plainThreadId
+  }
+  ... on LinearIssueThreadLink {
+    linearIssueId
+    linearIssueIdentifier
+  }
+  ... on JiraIssueThreadLink {
+    jiraIssueId
+    jiraIssueKey
+  }
+`;
+
+/**
+ * Links selection embedded in the thread reads. Capped at 25 because a thread
+ * usually carries a handful of links; use get_thread_links with `first` when
+ * more are needed.
+ */
+const THREAD_LINKS_SELECTION = `
+  links(first: 25) {
+    edges {
+      node {
+        ${THREAD_LINK_FIELDS}
+      }
+    }
   }
 `;
 
@@ -98,6 +147,7 @@ const THREAD_TIMELINE_SELECTION = `
     stringValue
     booleanValue
   }
+  ${THREAD_LINKS_SELECTION}
   createdAt { iso8601 }
   updatedAt { iso8601 }
   timelineEntries(first: 50) {
@@ -345,6 +395,61 @@ const extractLabels = (
     labelId: l.id,
     name: l.labelType.name,
   }));
+
+/**
+ * Raw thread link from GraphQL response
+ */
+interface RawThreadLink {
+  __typename: string;
+  id: string;
+  threadId: string;
+  title: string;
+  url: string;
+  status: string;
+  sourceType: string;
+  sourceId: string;
+  description?: string | null;
+  createdAt?: { iso8601: string } | null;
+  updatedAt?: { iso8601: string } | null;
+  plainThreadId?: string | null;
+  linearIssueId?: string | null;
+  linearIssueIdentifier?: string | null;
+  jiraIssueId?: string | null;
+  jiraIssueKey?: string | null;
+}
+
+/**
+ * Parse a single thread link. `linkedThreadId` is only set for links pointing
+ * at another Plain thread.
+ *
+ * A thread-to-thread link is a single record that both threads show. It is
+ * owned by the thread it was created on (`ownerThreadId`) and points at
+ * `linkedThreadId`. Read from the far end, `linkedThreadId` is the thread you
+ * are reading and `ownerThreadId` is the other end, so callers resolving "the
+ * other thread" must compare both against the thread they asked for.
+ */
+const parseThreadLink = (link: RawThreadLink): ThreadLinkInfo => ({
+  id: link.id,
+  type: link.__typename,
+  ownerThreadId: link.threadId,
+  title: link.title,
+  url: link.url,
+  status: link.status,
+  sourceType: link.sourceType,
+  sourceId: link.sourceId,
+  description: link.description ?? undefined,
+  linkedThreadId: link.plainThreadId ?? undefined,
+  linearIssueId: link.linearIssueId ?? undefined,
+  linearIssueIdentifier: link.linearIssueIdentifier ?? undefined,
+  jiraIssueId: link.jiraIssueId ?? undefined,
+  jiraIssueKey: link.jiraIssueKey ?? undefined,
+  createdAt: link.createdAt?.iso8601 ?? "",
+  updatedAt: link.updatedAt?.iso8601 ?? "",
+});
+
+const parseThreadLinks = (
+  links?: { edges?: Array<{ node: RawThreadLink }> } | null
+): ThreadLinkInfo[] => (links?.edges ?? []).map((edge) => parseThreadLink(edge.node));
 
 /**
  * Raw timeline entry from GraphQL response
@@ -660,6 +765,7 @@ interface RawThread {
   } | null;
   labels: Array<{ id?: string; labelType: { id: string; name: string } }>;
   threadFields: Array<{ key: string; stringValue?: string | null; booleanValue?: boolean | null }>;
+  links?: { edges?: Array<{ node: RawThreadLink }> } | null;
   createdAt: { iso8601: string };
   updatedAt: { iso8601: string };
   timelineEntries?: {
@@ -718,6 +824,7 @@ export const getThread = async (
     updatedAt: thread.updatedAt.iso8601,
     customFields,
     customFieldsRaw,
+    links: parseThreadLinks(thread.links),
     timeline,
   };
 };
@@ -773,6 +880,7 @@ export const getThreadByRef = async (
     updatedAt: thread.updatedAt.iso8601,
     customFields,
     customFieldsRaw,
+    links: parseThreadLinks(thread.links),
     timeline,
   };
 };
@@ -1216,6 +1324,257 @@ export const updateThreadLabels = async (
   }
 
   return { success: true, added, removed };
+};
+
+const THREAD_ID_BY_REF_QUERY = `
+  query GetThreadIdByRef($ref: String!) {
+    threadByRef(ref: $ref) {
+      id
+    }
+  }
+`;
+
+/**
+ * Resolve a thread to its id. Callers may pass the id directly or a human
+ * reference like "T-510", which is what the Plain UI shows. Exactly one of the
+ * two must be given.
+ */
+const resolveThreadId = async (
+  client: ReturnType<typeof getPlainClient>,
+  threadId: string | undefined,
+  ref: string | undefined,
+  label: string
+): Promise<string> => {
+  if (threadId && ref) {
+    throw new Error(`Provide only one of ${label}Id or ${label}Ref.`);
+  }
+  if (threadId) return threadId;
+  if (!ref) {
+    throw new Error(`Provide ${label}Id or ${label}Ref.`);
+  }
+
+  const result = await client.rawRequest({
+    query: THREAD_ID_BY_REF_QUERY,
+    variables: { ref },
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to resolve thread ${ref}: ${formatPlainError(result.error)}`);
+  }
+
+  const data = result.data as { threadByRef?: { id: string } | null };
+  const id = data.threadByRef?.id;
+  if (!id) {
+    throw new Error(`Thread not found: ${ref}`);
+  }
+  return id;
+};
+
+const CREATE_THREAD_LINK_MUTATION = `
+  mutation CreateThreadLink($input: CreateThreadLinkInput!) {
+    createThreadLink(input: $input) {
+      threadLink {
+        ${THREAD_LINK_FIELDS}
+      }
+      error {
+        message
+        type
+        code
+      }
+    }
+  }
+`;
+
+const DELETE_THREAD_LINK_MUTATION = `
+  mutation DeleteThreadLink($input: DeleteThreadLinkInput!) {
+    deleteThreadLink(input: $input) {
+      error {
+        message
+        type
+        code
+      }
+    }
+  }
+`;
+
+const THREAD_LINKS_QUERY = `
+  query GetThreadLinks($threadId: ID!, $first: Int!) {
+    thread(threadId: $threadId) {
+      id
+      links(first: $first) {
+        edges {
+          node {
+            ${THREAD_LINK_FIELDS}
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Link a thread to another Plain thread, a Linear issue, a Jira issue, or a
+ * generic external resource. The link is created on the thread named by
+ * threadId/threadRef and points at the target.
+ *
+ * Exactly one target kind must be given. Linear needs both its id and url;
+ * a generic link needs both sourceType and sourceId (the source type must be
+ * configured in the Plain workspace).
+ */
+export const linkThreads = async (
+  input: LinkThreadsInput
+): Promise<{ success: true; threadId: string; threadLink: ThreadLinkInfo }> => {
+  const client = getPlainClient();
+
+  const threadId = await resolveThreadId(client, input.threadId, input.threadRef, "thread");
+
+  const hasPlainTarget = Boolean(input.linkedThreadId || input.linkedThreadRef);
+  const hasLinearTarget = Boolean(input.linearIssueId || input.linearIssueUrl);
+  const hasJiraTarget = Boolean(input.jiraIssueId);
+  const hasGenericTarget = Boolean(input.sourceType || input.sourceId);
+
+  const targetCount = [hasPlainTarget, hasLinearTarget, hasJiraTarget, hasGenericTarget].filter(
+    Boolean
+  ).length;
+  if (targetCount === 0) {
+    throw new Error(
+      "Provide a link target: linkedThreadId/linkedThreadRef, linearIssueId + linearIssueUrl, jiraIssueId, or sourceType + sourceId."
+    );
+  }
+  if (targetCount > 1) {
+    throw new Error("Provide only one link target per call.");
+  }
+
+  let target: Record<string, unknown>;
+  if (hasPlainTarget) {
+    const plainThreadId = await resolveThreadId(
+      client,
+      input.linkedThreadId,
+      input.linkedThreadRef,
+      "linkedThread"
+    );
+    if (plainThreadId === threadId) {
+      throw new Error("A thread cannot be linked to itself.");
+    }
+    target = { plainThread: { plainThreadId } };
+  } else if (hasLinearTarget) {
+    if (!input.linearIssueId || !input.linearIssueUrl) {
+      throw new Error("Linear links need both linearIssueId and linearIssueUrl.");
+    }
+    target = {
+      linearIssue: { linearIssueId: input.linearIssueId, linearIssueUrl: input.linearIssueUrl },
+    };
+  } else if (hasJiraTarget) {
+    target = { jiraIssue: { jiraIssueId: input.jiraIssueId } };
+  } else {
+    if (!input.sourceType || !input.sourceId) {
+      throw new Error("Generic links need both sourceType and sourceId.");
+    }
+    target = { sourceType: input.sourceType, sourceId: input.sourceId };
+  }
+
+  const result = await client.rawRequest({
+    query: CREATE_THREAD_LINK_MUTATION,
+    variables: { input: { threadId, ...target } },
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to link thread: ${formatPlainError(result.error)}`);
+  }
+
+  const data = result.data as {
+    createThreadLink: {
+      threadLink?: RawThreadLink | null;
+      error?: { message: string; type: string; code: string } | null;
+    };
+  };
+  const response = data.createThreadLink;
+
+  if (response.error) {
+    throw new Error(`Failed to link thread: ${formatPlainError(response.error)}`);
+  }
+  if (!response.threadLink) {
+    throw new Error("No thread link returned from createThreadLink mutation");
+  }
+
+  return { success: true, threadId, threadLink: parseThreadLink(response.threadLink) };
+};
+
+/**
+ * List the links attached to a thread. get_thread already returns the first 25
+ * links; use this when a thread has more, or to read links without the
+ * timeline payload.
+ */
+export const getThreadLinks = async (
+  input: GetThreadLinksInput
+): Promise<{ threadId: string; links: ThreadLinkInfo[]; hasNextPage: boolean }> => {
+  const client = getPlainClient();
+
+  const threadId = await resolveThreadId(client, input.threadId, input.ref, "thread");
+
+  const result = await client.rawRequest({
+    query: THREAD_LINKS_QUERY,
+    variables: { threadId, first: input.first ?? 25 },
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to get thread links: ${formatPlainError(result.error)}`);
+  }
+
+  const data = result.data as {
+    thread?: {
+      id: string;
+      links?: {
+        edges?: Array<{ node: RawThreadLink }>;
+        pageInfo?: { hasNextPage: boolean; endCursor?: string | null };
+      } | null;
+    } | null;
+  };
+  const thread = data.thread;
+  if (!thread) {
+    throw new Error(`Thread not found: ${threadId}`);
+  }
+
+  return {
+    threadId: thread.id,
+    links: parseThreadLinks(thread.links),
+    hasNextPage: thread.links?.pageInfo?.hasNextPage ?? false,
+  };
+};
+
+/**
+ * Remove a link from a thread. Takes the link's own id (the `id` field of an
+ * entry in `links`), not the id of the thread on the other end. Plain's
+ * deleteThreadLink is idempotent: deleting an id that no longer exists returns
+ * no error, so this reports success in that case too.
+ */
+export const unlinkThread = async (
+  input: UnlinkThreadInput
+): Promise<{ success: true; threadLinkId: string }> => {
+  const client = getPlainClient();
+
+  const result = await client.rawRequest({
+    query: DELETE_THREAD_LINK_MUTATION,
+    variables: { input: { threadLinkId: input.threadLinkId } },
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to unlink thread: ${formatPlainError(result.error)}`);
+  }
+
+  const data = result.data as {
+    deleteThreadLink: { error?: { message: string; type: string; code: string } | null };
+  };
+
+  if (data.deleteThreadLink?.error) {
+    throw new Error(`Failed to unlink thread: ${formatPlainError(data.deleteThreadLink.error)}`);
+  }
+
+  return { success: true, threadLinkId: input.threadLinkId };
 };
 
 /**

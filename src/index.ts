@@ -5,7 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { listThreads, getThread, getThreadByRef, getThreadFields, getAttachmentDownloadUrl, getAttachmentContent, replyToThread, markThreadAsDone, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels, addInternalNote, addLabelsToThread, getLabelTypes, createThread } from "./tools/threads.js";
+import { listThreads, getThread, getThreadByRef, getThreadFields, getAttachmentDownloadUrl, getAttachmentContent, replyToThread, markThreadAsDone, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels, addInternalNote, addLabelsToThread, getLabelTypes, createThread, linkThreads, getThreadLinks, unlinkThread } from "./tools/threads.js";
 import { listHelpCenters, getHelpCenter, listHelpCenterArticles, getHelpCenterArticle, getHelpCenterArticleBySlug, upsertHelpCenterArticle, createHelpCenterArticleGroup, deleteHelpCenterArticleGroup } from "./tools/helpCenter.js";
 import {
   listThreadsInputSchema,
@@ -24,6 +24,9 @@ import {
   updateThreadFieldsInputSchema,
   getLabelTypesInputSchema,
   createThreadInputSchema,
+  linkThreadsInputSchema,
+  getThreadLinksInputSchema,
+  unlinkThreadInputSchema,
   listHelpCentersInputSchema,
   getHelpCenterInputSchema,
   listHelpCenterArticlesInputSchema,
@@ -505,6 +508,93 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["markdown"],
       },
     },
+    {
+      name: "link_threads",
+      description:
+        "Link a thread to another Plain thread (e.g. a duplicate or a related report), or to a Linear issue, a Jira issue, or a generic external resource. Identify the thread that receives the link with threadId or threadRef (e.g. 'T-510'), then give exactly one target: linkedThreadId/linkedThreadRef for a Plain thread, linearIssueId + linearIssueUrl, jiraIssueId, or sourceType + sourceId. Returns the created link including its id, which unlink_thread takes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "ID of the thread the link is created on. Provide threadId or threadRef.",
+          },
+          threadRef: {
+            type: "string",
+            description: "Reference of the thread the link is created on, e.g. 'T-510'.",
+          },
+          linkedThreadId: {
+            type: "string",
+            description: "ID of the Plain thread to link to.",
+          },
+          linkedThreadRef: {
+            type: "string",
+            description: "Reference of the Plain thread to link to, e.g. 'T-511'.",
+          },
+          linearIssueId: {
+            type: "string",
+            description: "Linear issue ID to link to. Requires linearIssueUrl.",
+          },
+          linearIssueUrl: {
+            type: "string",
+            description: "Linear issue URL. Requires linearIssueId.",
+          },
+          jiraIssueId: {
+            type: "string",
+            description: "Jira issue ID to link to.",
+          },
+          sourceType: {
+            type: "string",
+            description:
+              "Generic link source type. The source must be configured in the Plain workspace. Requires sourceId.",
+          },
+          sourceId: {
+            type: "string",
+            description: "Generic link source ID within sourceType. Requires sourceType.",
+          },
+        },
+      },
+    },
+    {
+      name: "get_thread_links",
+      description:
+        "List the links attached to a thread, including linked Plain threads and linked Linear/Jira issues. get_thread already returns the first 25 links; use this to page past that or to read links without the timeline payload. A thread-to-thread link is one record that both threads show: `ownerThreadId` is the thread it was created on and `linkedThreadId` is the other end, so the far end of a link is whichever of the two is not the thread you asked for.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "ID of the thread to read links from. Provide threadId or ref.",
+          },
+          ref: {
+            type: "string",
+            description: "Reference of the thread to read links from, e.g. 'T-510'.",
+          },
+          first: {
+            type: "number",
+            minimum: 1,
+            maximum: 100,
+            default: 25,
+            description: "Number of links to return (default 25, max 100)",
+          },
+        },
+      },
+    },
+    {
+      name: "unlink_thread",
+      description:
+        "Remove a link from a thread. Takes the link's own id (the `id` field of an entry in the `links` array from get_thread or get_thread_links), not the id of the thread on the other end. Removing a link that no longer exists also reports success.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadLinkId: {
+            type: "string",
+            description: "The ID of the link to remove",
+          },
+        },
+        required: ["threadLinkId"],
+      },
+    },
     // --- Help Center tools ---
     {
       name: "list_help_centers",
@@ -795,6 +885,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "create_thread": {
         const input = createThreadInputSchema.parse(args);
         const result = await createThread(input);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "link_threads": {
+        const input = linkThreadsInputSchema.parse(args);
+        const result = await linkThreads(input);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "get_thread_links": {
+        const input = getThreadLinksInputSchema.parse(args);
+        const result = await getThreadLinks(input);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "unlink_thread": {
+        const input = unlinkThreadInputSchema.parse(args);
+        const result = await unlinkThread(input);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
