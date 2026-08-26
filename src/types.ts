@@ -343,6 +343,15 @@ export const upsertThreadFieldInputSchema = z.object({
     ),
 });
 
+export const deleteThreadFieldInputSchema = z.object({
+  threadId: z.string().describe("The ID of the thread to remove the field from"),
+  key: z
+    .string()
+    .describe(
+      "Custom field key in snake_case to remove, e.g. triage_owner. Deleting is the only way to clear an ENUM field; the field can be set again later with upsert_thread_field."
+    ),
+});
+
 export const addInternalNoteInputSchema = z.object({
   threadId: z.string().describe("The ID of the thread to add a note to"),
   markdown: z.string().describe("Markdown content for the internal note"),
@@ -657,6 +666,7 @@ export type GetThreadByRefInput = z.infer<typeof getThreadByRefInputSchema>;
 export type GetAttachmentDownloadUrlInput = z.infer<typeof getAttachmentDownloadUrlInputSchema>;
 export type GetAttachmentContentInput = z.infer<typeof getAttachmentContentInputSchema>;
 export type UpsertThreadFieldInput = z.infer<typeof upsertThreadFieldInputSchema>;
+export type DeleteThreadFieldInput = z.infer<typeof deleteThreadFieldInputSchema>;
 export type AddInternalNoteInput = z.infer<typeof addInternalNoteInputSchema>;
 export type ReplyToThreadInput = z.infer<typeof replyToThreadInputSchema>;
 export type MarkThreadAsDoneInput = z.infer<typeof markThreadAsDoneInputSchema>;

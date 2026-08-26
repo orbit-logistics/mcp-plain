@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { ThreadStatus } from "@team-plain/typescript-sdk";
-import { listThreads, getThread, getThreadByRef, getThreadFields, replyToThread, markThreadAsDone, createThread, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels, linkThreads, getThreadLinks, unlinkThread } from "./threads.js";
+import { listThreads, getThread, getThreadByRef, getThreadFields, replyToThread, markThreadAsDone, createThread, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels, linkThreads, getThreadLinks, unlinkThread, deleteThreadField } from "./threads.js";
 import { getPlainClient } from "../client.js";
 
 // Mock the client module
@@ -1479,6 +1479,37 @@ describe("updateThreadFields", () => {
     const inputs = mockClient.rawRequest.mock.calls.map((c) => c[0].variables.input);
     expect(inputs[0]).toEqual({ identifier: { threadId: "th_1", key: "triage_owner" }, type: "ENUM", stringValue: "local" });
     expect(inputs[1]).toEqual({ identifier: { threadId: "th_1", key: "triage_claimed_at" }, type: "STRING", stringValue: "2026-08-26T12:40:00Z" });
+  });
+});
+
+describe("deleteThreadField", () => {
+  let mockClient: { rawRequest: Mock };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient = { rawRequest: vi.fn() };
+    (getPlainClient as Mock).mockReturnValue(mockClient);
+  });
+
+  it("sends the identifier input shape", async () => {
+    mockClient.rawRequest.mockResolvedValue({ data: { deleteThreadField: { error: null } }, error: null });
+
+    const res = await deleteThreadField({ threadId: "th_1", key: "triage_owner" });
+
+    expect(res).toEqual({ success: true, threadId: "th_1", key: "triage_owner" });
+    const call = mockClient.rawRequest.mock.calls[0]![0];
+    expect(call.variables.input).toEqual({ identifier: { threadId: "th_1", key: "triage_owner" } });
+  });
+
+  it("throws a formatted error on failure", async () => {
+    mockClient.rawRequest.mockResolvedValue({
+      data: { deleteThreadField: { error: { message: "not found", type: "bad_request", code: "field_not_found" } } },
+      error: null,
+    });
+
+    await expect(deleteThreadField({ threadId: "th_1", key: "triage_owner" })).rejects.toThrow(
+      "Failed to delete thread field 'triage_owner'"
+    );
   });
 });
 

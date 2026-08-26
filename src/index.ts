@@ -5,7 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { listThreads, getThread, getThreadByRef, getThreadFields, getAttachmentDownloadUrl, getAttachmentContent, replyToThread, markThreadAsDone, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels, addInternalNote, addLabelsToThread, getLabelTypes, createThread, linkThreads, getThreadLinks, unlinkThread } from "./tools/threads.js";
+import { listThreads, getThread, getThreadByRef, getThreadFields, getAttachmentDownloadUrl, getAttachmentContent, replyToThread, markThreadAsDone, upsertThreadField, updateThreadFields, updateThreadPriority, updateThreadLabels, addInternalNote, addLabelsToThread, getLabelTypes, createThread, linkThreads, getThreadLinks, unlinkThread, deleteThreadField } from "./tools/threads.js";
 import { listHelpCenters, getHelpCenter, listHelpCenterArticles, getHelpCenterArticle, getHelpCenterArticleBySlug, upsertHelpCenterArticle, createHelpCenterArticleGroup, deleteHelpCenterArticleGroup } from "./tools/helpCenter.js";
 import {
   listThreadsInputSchema,
@@ -15,6 +15,7 @@ import {
   getAttachmentDownloadUrlInputSchema,
   getAttachmentContentInputSchema,
   upsertThreadFieldInputSchema,
+  deleteThreadFieldInputSchema,
   addInternalNoteInputSchema,
   replyToThreadInputSchema,
   markThreadAsDoneInputSchema,
@@ -382,6 +383,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ["threadId", "fields"],
+      },
+    },
+    {
+      name: "delete_thread_field",
+      description:
+        "Remove a custom field value from a thread (e.g. clear triage_owner to release a triage claim). Plain has no empty value for ENUM fields, so clearing means deleting the field; it can be set again later with upsert_thread_field.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "The ID of the thread to remove the field from",
+          },
+          key: {
+            type: "string",
+            description:
+              "Custom field key in snake_case, e.g. triage_owner, triage_claimed_at, agent_readiness",
+          },
+        },
+        required: ["threadId", "key"],
       },
     },
     {
@@ -869,6 +890,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "update_thread_fields": {
         const input = updateThreadFieldsInputSchema.parse(args);
         const result = await updateThreadFields(input);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "delete_thread_field": {
+        const input = deleteThreadFieldInputSchema.parse(args);
+        const result = await deleteThreadField(input);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };

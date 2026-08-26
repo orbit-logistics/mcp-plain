@@ -13,6 +13,7 @@ import {
   type GetAttachmentContentInput,
   type UpsertThreadFieldInput,
   type UpdateThreadFieldsInput,
+  type DeleteThreadFieldInput,
   type UpdateThreadPriorityInput,
   type UpdateThreadLabelsInput,
   type AddInternalNoteInput,
@@ -1214,6 +1215,49 @@ export const upsertThreadField = async (
   const client = getPlainClient();
   const written = await upsertOneField(client, input.threadId, input.key, input.value, input.type);
   return { success: true, ...written };
+};
+
+const DELETE_THREAD_FIELD_MUTATION = `
+  mutation DeleteThreadField($input: DeleteThreadFieldInput!) {
+    deleteThreadField(input: $input) {
+      error {
+        message
+        type
+        code
+      }
+    }
+  }
+`;
+
+/**
+ * Remove a custom field value from a thread entirely. Plain has no "empty"
+ * value for ENUM fields, so clearing a field (e.g. releasing a triage_owner
+ * claim) means deleting the thread field. It can be set again via upsert.
+ */
+export const deleteThreadField = async (
+  input: DeleteThreadFieldInput
+): Promise<{ success: true; threadId: string; key: string }> => {
+  const client = getPlainClient();
+
+  const result = await client.rawRequest({
+    query: DELETE_THREAD_FIELD_MUTATION,
+    variables: { input: { identifier: { threadId: input.threadId, key: input.key } } },
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to delete thread field '${input.key}': ${formatPlainError(result.error)}`);
+  }
+
+  const data = result.data as {
+    deleteThreadField: { error?: { message: string; type: string; code: string } | null };
+  };
+  if (data.deleteThreadField?.error) {
+    throw new Error(
+      `Failed to delete thread field '${input.key}': ${formatPlainError(data.deleteThreadField.error)}`
+    );
+  }
+
+  return { success: true, threadId: input.threadId, key: input.key };
 };
 
 /**
