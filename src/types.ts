@@ -25,6 +25,8 @@ export interface ThreadCustomFields {
   requestFeature?: boolean;
   sentrySession?: string;
   agentReadiness?: string;
+  triageOwner?: string;
+  triageClaimedAt?: string;
 }
 
 // Field key mapping from Plain's snake_case to camelCase
@@ -40,6 +42,8 @@ export const FIELD_KEY_MAP: Record<string, keyof ThreadCustomFields> = {
   request_feature: "requestFeature",
   sentry_session: "sentrySession",
   agent_readiness: "agentReadiness",
+  triage_owner: "triageOwner",
+  triage_claimed_at: "triageClaimedAt",
 };
 
 // Thread label info
@@ -326,7 +330,7 @@ export const upsertThreadFieldInputSchema = z.object({
   key: z
     .string()
     .describe(
-      "Custom field key in snake_case, e.g. impact_level, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, request_feature, agent_readiness"
+      "Custom field key in snake_case, e.g. impact_level, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, request_feature, agent_readiness, triage_owner, triage_claimed_at"
     ),
   value: z
     .string()
@@ -335,7 +339,7 @@ export const upsertThreadFieldInputSchema = z.object({
     .enum(["BOOL", "ENUM", "STRING"])
     .optional()
     .describe(
-      "Plain field schema type. Defaults: request_feature=BOOL; impact_level/agent_readiness=ENUM; everything else=STRING. Override when writing a key the server doesn't know about."
+      "Plain field schema type. Defaults: request_feature=BOOL; impact_level/agent_readiness/triage_owner=ENUM; everything else=STRING. Override when writing a key the server doesn't know about."
     ),
 });
 
@@ -411,7 +415,7 @@ export const threadFieldUpdateSchema = z.object({
   key: z
     .string()
     .describe(
-      "Custom field key in snake_case. Must be an allowlisted key, e.g. impact_level, agent_readiness, request_feature, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from."
+      "Custom field key in snake_case. Must be an allowlisted key, e.g. impact_level, agent_readiness, request_feature, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, triage_owner, triage_claimed_at."
     ),
   value: z
     .string()

@@ -1,6 +1,6 @@
 {
   "name": "@orbitlogistics/mcp-plain",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server for the Plain customer support platform",
   "repository": {
     "type": "git",

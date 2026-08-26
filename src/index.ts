@@ -138,7 +138,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "get_thread_fields",
       description:
-        "Get just the custom field values for a thread. Returns fields like impactLevel, posthogSession, sentrySession, tenant, etc.",
+        "Get just the custom field values for a thread. Returns fields like impactLevel, posthogSession, sentrySession, tenant, triageOwner, triageClaimedAt, etc.",
       inputSchema: {
         type: "object",
         properties: {
@@ -232,7 +232,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           key: {
             type: "string",
             description:
-              "Custom field key in snake_case, e.g. impact_level, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, request_feature, agent_readiness",
+              "Custom field key in snake_case, e.g. impact_level, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, request_feature, agent_readiness, triage_owner, triage_claimed_at",
           },
           value: {
             type: "string",
@@ -243,7 +243,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             enum: ["BOOL", "ENUM", "STRING"],
             description:
-              "Plain field schema type. Auto-detected by key (request_feature=BOOL; impact_level/agent_readiness=ENUM; default STRING). Override when writing a key the server doesn't know about.",
+              "Plain field schema type. Auto-detected by key (request_feature=BOOL; impact_level/agent_readiness/triage_owner=ENUM; default STRING). Override when writing a key the server doesn't know about.",
           },
         },
         required: ["threadId", "key", "value"],
@@ -348,7 +348,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "update_thread_fields",
       description:
-        "Set or update multiple custom fields on a thread in one call. Each field key must be an allowlisted snake_case key (e.g. impact_level, agent_readiness, request_feature, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from); unknown keys are rejected. Field type (BOOL/ENUM/STRING) is auto-detected per key.",
+        "Set or update multiple custom fields on a thread in one call. Each field key must be an allowlisted snake_case key (e.g. impact_level, agent_readiness, request_feature, app, stage, tenant_id, notion_ticket, github_pr, posthog_session, sentry_session, reported_from, triage_owner, triage_claimed_at); unknown keys are rejected. Field type (BOOL/ENUM/STRING) is auto-detected per key.",
       inputSchema: {
         type: "object",
         properties: {

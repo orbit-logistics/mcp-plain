@@ -1143,7 +1143,7 @@ const BOOLEAN_FIELD_KEYS = new Set(["request_feature"]);
 // Enum field keys that must be sent as type=ENUM. Plain's schema rejects
 // STRING writes against ENUM-typed fields, so this mapping prevents that
 // silent failure mode.
-const ENUM_FIELD_KEYS = new Set(["agent_readiness", "impact_level"]);
+const ENUM_FIELD_KEYS = new Set(["agent_readiness", "impact_level", "triage_owner"]);
 
 type ThreadFieldType = "BOOL" | "ENUM" | "STRING";
 

@@ -1460,6 +1460,26 @@ describe("updateThreadFields", () => {
     expect(res.updated.map((u) => u.type)).toEqual(["ENUM", "ENUM"]);
     expect(mockClient.rawRequest).toHaveBeenCalledTimes(2);
   });
+
+  it("writes triage claim fields with ENUM owner and STRING timestamp", async () => {
+    mockClient.rawRequest.mockImplementation((req) => Promise.resolve({
+      data: { upsertThreadField: { result: "UPDATED", threadField: { id: "tf", key: req.variables.input.identifier.key, type: req.variables.input.type, stringValue: "v", booleanValue: null }, error: null } },
+      error: null,
+    }));
+
+    const res = await updateThreadFields({
+      threadId: "th_1",
+      fields: [
+        { key: "triage_owner", value: "local" },
+        { key: "triage_claimed_at", value: "2026-08-26T12:40:00Z" },
+      ],
+    });
+
+    expect(res.updated.map((u) => u.type)).toEqual(["ENUM", "STRING"]);
+    const inputs = mockClient.rawRequest.mock.calls.map((c) => c[0].variables.input);
+    expect(inputs[0]).toEqual({ identifier: { threadId: "th_1", key: "triage_owner" }, type: "ENUM", stringValue: "local" });
+    expect(inputs[1]).toEqual({ identifier: { threadId: "th_1", key: "triage_claimed_at" }, type: "STRING", stringValue: "2026-08-26T12:40:00Z" });
+  });
 });
 
 describe("updateThreadPriority", () => {
