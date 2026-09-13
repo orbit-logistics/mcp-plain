@@ -700,7 +700,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "upsert_help_center_article",
       description:
-        "Create or update a help center article. New articles are saved as DRAFT unless you pass status. To update an existing article, provide helpCenterArticleId; the update keeps the article's current status and group unless you pass status or helpCenterArticleGroupId explicitly, so updating a published article does NOT take it offline. Content must be HTML (not markdown). Returns the article as read back after the write (including status and articleGroup) plus a link to edit it in the Plain UI.\n\nIMPORTANT: When updating an existing article, you MUST preserve the original HTML formatting exactly. Copy the existing contentHtml verbatim and only modify the specific parts that need changing. Do NOT reformat, re-indent, restructure tags, collapse whitespace, change tag styles, or rewrite any HTML that isn't part of your intended edit. Treat the HTML as a surgical edit, not a rewrite.",
+        "Create or update a help center article. New articles are saved as DRAFT unless you pass status. To update an existing article, provide helpCenterArticleId; the update keeps the article's current status, group and slug unless you pass status, helpCenterArticleGroupId or slug explicitly, so updating a published article does NOT take it offline and does NOT change its public URL. Content must be HTML (not markdown). Returns the article as read back after the write (including status and articleGroup) plus a link to edit it in the Plain UI.\n\nIMPORTANT: When updating an existing article, you MUST preserve the original HTML formatting exactly. Copy the existing contentHtml verbatim and only modify the specific parts that need changing. Do NOT reformat, re-indent, restructure tags, collapse whitespace, change tag styles, or rewrite any HTML that isn't part of your intended edit. Treat the HTML as a surgical edit, not a rewrite.",
       inputSchema: {
         type: "object",
         properties: {
@@ -726,7 +726,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           slug: {
             type: "string",
-            description: "URL slug for the article",
+            description:
+              "URL slug for the article. On an update, defaults to the article's current slug.",
           },
           helpCenterArticleGroupId: {
             type: "string",

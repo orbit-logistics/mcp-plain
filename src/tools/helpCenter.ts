@@ -454,6 +454,10 @@ export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInpu
   // take a published article off the public help center.
   const status = input.status ?? existing?.status ?? "DRAFT";
   const helpCenterArticleGroupId = input.helpCenterArticleGroupId ?? existing?.articleGroup?.id;
+  // The slug is part of the public article URL, so carry it forward too rather
+  // than letting the replace regenerate it. Left unset when creating, so Plain
+  // derives the slug from the title as before.
+  const slug = input.slug ?? existing?.slug;
 
   const variables: Record<string, unknown> = {
     helpCenterId: input.helpCenterId,
@@ -466,8 +470,8 @@ export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInpu
   if (input.helpCenterArticleId) {
     variables.helpCenterArticleId = input.helpCenterArticleId;
   }
-  if (input.slug !== undefined) {
-    variables.slug = input.slug;
+  if (slug !== undefined) {
+    variables.slug = slug;
   }
   // Always send the group. Omitting it on an update clears the article's group.
   if (helpCenterArticleGroupId !== undefined) {

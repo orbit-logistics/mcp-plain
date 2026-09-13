@@ -630,7 +630,12 @@ export const upsertHelpCenterArticleInputSchema = z.object({
     .optional()
     .describe("Existing article ID for updates. Omit to create a new article."),
   description: z.string().describe("Short description / summary of the article"),
-  slug: z.string().optional().describe("URL slug for the article"),
+  slug: z
+    .string()
+    .optional()
+    .describe(
+      "URL slug for the article. On an update, defaults to the article's current slug."
+    ),
   helpCenterArticleGroupId: z
     .string()
     .optional()

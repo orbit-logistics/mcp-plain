@@ -506,6 +506,65 @@ describe("upsertHelpCenterArticle", () => {
     expect(result.articleGroup).toEqual({ id: "grp_2", name: "Advanced" });
   });
 
+  it("should keep the existing slug when the update omits it", async () => {
+    const existing = createMockArticle({ slug: "getting-started-abc123" });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    const result = await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "A Completely Different Title",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+    });
+
+    expect(upsertInput(mockRawRequest.mock.calls[1]!).slug).toBe("getting-started-abc123");
+    expect(result.slug).toBe("getting-started-abc123");
+  });
+
+  it("should let an explicit slug win over the fetched one", async () => {
+    const existing = createMockArticle({ slug: "getting-started-abc123" });
+    const renamed = createMockArticle({ slug: "new-slug" });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(renamed));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(renamed));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    const result = await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+      slug: "new-slug",
+    });
+
+    expect(upsertInput(mockRawRequest.mock.calls[1]!).slug).toBe("new-slug");
+    expect(result.slug).toBe("new-slug");
+  });
+
+  it("should not send a slug when creating without one", async () => {
+    const article = createMockArticle({ status: "DRAFT" });
+
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(article));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Welcome to our help center</p>",
+    });
+
+    expect(upsertInput(mockRawRequest.mock.calls[0]!)).not.toHaveProperty("slug");
+  });
+
   it("should omit the group when the article has none and none was passed", async () => {
     const ungrouped = createMockArticle({ articleGroup: null });
 
