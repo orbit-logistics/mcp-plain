@@ -634,7 +634,15 @@ export const upsertHelpCenterArticleInputSchema = z.object({
   helpCenterArticleGroupId: z
     .string()
     .optional()
-    .describe("Article group ID to place the article in"),
+    .describe(
+      "Article group ID to place the article in. On an update, defaults to the article's current group."
+    ),
+  status: z
+    .enum(["DRAFT", "PUBLISHED"])
+    .optional()
+    .describe(
+      "Publication status. Defaults to DRAFT for new articles and to the article's current status on an update."
+    ),
 });
 
 export const createHelpCenterArticleGroupInputSchema = z.object({

@@ -700,7 +700,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "upsert_help_center_article",
       description:
-        "Create or update a help center article. Articles are always saved as DRAFT status. To update an existing article, provide helpCenterArticleId. Content must be HTML (not markdown). Returns the article data and a link to edit it in the Plain UI.\n\nIMPORTANT: When updating an existing article, you MUST preserve the original HTML formatting exactly. Copy the existing contentHtml verbatim and only modify the specific parts that need changing. Do NOT reformat, re-indent, restructure tags, collapse whitespace, change tag styles, or rewrite any HTML that isn't part of your intended edit. Treat the HTML as a surgical edit, not a rewrite.",
+        "Create or update a help center article. New articles are saved as DRAFT unless you pass status. To update an existing article, provide helpCenterArticleId; the update keeps the article's current status and group unless you pass status or helpCenterArticleGroupId explicitly, so updating a published article does NOT take it offline. Content must be HTML (not markdown). Returns the article as read back after the write (including status and articleGroup) plus a link to edit it in the Plain UI.\n\nIMPORTANT: When updating an existing article, you MUST preserve the original HTML formatting exactly. Copy the existing contentHtml verbatim and only modify the specific parts that need changing. Do NOT reformat, re-indent, restructure tags, collapse whitespace, change tag styles, or rewrite any HTML that isn't part of your intended edit. Treat the HTML as a surgical edit, not a rewrite.",
       inputSchema: {
         type: "object",
         properties: {
@@ -730,7 +730,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           helpCenterArticleGroupId: {
             type: "string",
-            description: "Article group ID to place the article in",
+            description:
+              "Article group ID to place the article in. On an update, defaults to the article's current group.",
+          },
+          status: {
+            type: "string",
+            enum: ["DRAFT", "PUBLISHED"],
+            description:
+              "Publication status. Defaults to DRAFT for new articles and to the article's current status on an update.",
           },
         },
         required: ["helpCenterId", "title", "contentHtml", "description"],

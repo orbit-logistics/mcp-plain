@@ -366,6 +366,24 @@ describe("getHelpCenterArticleBySlug", () => {
 describe("upsertHelpCenterArticle", () => {
   let mockRawRequest: Mock;
 
+  // Response shapes for the calls the upsert makes, in order:
+  // an optional pre-update read, the mutation, the read-back, the workspace query.
+  const articleReadResponse = (article: unknown) => ({
+    data: { helpCenterArticle: article },
+    error: null,
+  });
+  const upsertResponse = (article: unknown) => ({
+    data: { upsertHelpCenterArticle: { helpCenterArticle: article, error: null } },
+    error: null,
+  });
+  const workspaceResponse = {
+    data: { myWorkspace: { id: "ws_456" } },
+    error: null,
+  };
+
+  const upsertInput = (call: unknown) =>
+    (call as [{ variables: { input: Record<string, unknown> } }])[0].variables.input;
+
   beforeEach(() => {
     mockRawRequest = vi.fn();
     (getPlainClient as Mock).mockReturnValue({ rawRequest: mockRawRequest });
@@ -374,18 +392,10 @@ describe("upsertHelpCenterArticle", () => {
   it("should create a new article as DRAFT and return link", async () => {
     const article = createMockArticle({ status: "DRAFT" });
 
-    // First call: upsert mutation
-    mockRawRequest.mockResolvedValueOnce({
-      data: {
-        upsertHelpCenterArticle: { helpCenterArticle: article, error: null },
-      },
-      error: null,
-    });
-    // Second call: workspace query
-    mockRawRequest.mockResolvedValueOnce({
-      data: { myWorkspace: { id: "ws_456" } },
-      error: null,
-    });
+    // No pre-update read when creating: mutation, read-back, workspace query.
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(article));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
 
     const result = await upsertHelpCenterArticle({
       helpCenterId: "hc_123",
@@ -400,24 +410,19 @@ describe("upsertHelpCenterArticle", () => {
       "https://app.plain.com/workspace/ws_456/help-center/hc_123/articles/art_123/"
     );
 
-    // Verify DRAFT is forced
-    const upsertCall = mockRawRequest.mock.calls[0]!;
-    expect(upsertCall![0]!.variables.input.status).toBe("DRAFT");
+    expect(mockRawRequest).toHaveBeenCalledTimes(3);
+    expect(upsertInput(mockRawRequest.mock.calls[0]!).status).toBe("DRAFT");
   });
 
   it("should update an existing article", async () => {
     const article = createMockArticle({ status: "DRAFT", title: "Updated Title" });
 
-    mockRawRequest.mockResolvedValueOnce({
-      data: {
-        upsertHelpCenterArticle: { helpCenterArticle: article, error: null },
-      },
-      error: null,
-    });
-    mockRawRequest.mockResolvedValueOnce({
-      data: { myWorkspace: { id: "ws_456" } },
-      error: null,
-    });
+    mockRawRequest.mockResolvedValueOnce(
+      articleReadResponse(createMockArticle({ status: "DRAFT" }))
+    );
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(article));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
 
     const result = await upsertHelpCenterArticle({
       helpCenterId: "hc_123",
@@ -428,24 +433,167 @@ describe("upsertHelpCenterArticle", () => {
     });
 
     expect(result.id).toBe("art_123");
+    expect(upsertInput(mockRawRequest.mock.calls[1]!).helpCenterArticleId).toBe("art_123");
+  });
 
-    const upsertCall = mockRawRequest.mock.calls[0]!;
-    expect(upsertCall![0]!.variables.input.helpCenterArticleId).toBe("art_123");
+  it("should keep a published article published and keep its group", async () => {
+    const published = createMockArticle({
+      status: "PUBLISHED",
+      articleGroup: { id: "grp_1", name: "Basics" },
+    });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(published));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(published));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(published));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    const result = await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+    });
+
+    const input = upsertInput(mockRawRequest.mock.calls[1]!);
+    expect(input.status).toBe("PUBLISHED");
+    expect(input.helpCenterArticleGroupId).toBe("grp_1");
+    expect(result.status).toBe("PUBLISHED");
+    expect(result.articleGroup).toEqual({ id: "grp_1", name: "Basics" });
+  });
+
+  it("should let an explicit status win over the fetched one", async () => {
+    const published = createMockArticle({ status: "PUBLISHED" });
+    const drafted = createMockArticle({ status: "DRAFT" });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(published));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(drafted));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(drafted));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    const result = await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+      status: "DRAFT",
+    });
+
+    expect(upsertInput(mockRawRequest.mock.calls[1]!).status).toBe("DRAFT");
+    expect(result.status).toBe("DRAFT");
+  });
+
+  it("should let an explicit group win over the fetched one", async () => {
+    const existing = createMockArticle({ articleGroup: { id: "grp_1", name: "Basics" } });
+    const moved = createMockArticle({ articleGroup: { id: "grp_2", name: "Advanced" } });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(moved));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(moved));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    const result = await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+      helpCenterArticleGroupId: "grp_2",
+    });
+
+    expect(upsertInput(mockRawRequest.mock.calls[1]!).helpCenterArticleGroupId).toBe("grp_2");
+    expect(result.articleGroup).toEqual({ id: "grp_2", name: "Advanced" });
+  });
+
+  it("should omit the group when the article has none and none was passed", async () => {
+    const ungrouped = createMockArticle({ articleGroup: null });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(ungrouped));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(ungrouped));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(ungrouped));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+    });
+
+    expect(upsertInput(mockRawRequest.mock.calls[1]!)).not.toHaveProperty(
+      "helpCenterArticleGroupId"
+    );
+  });
+
+  it("should fall back to DRAFT when the pre-update read fails", async () => {
+    const article = createMockArticle({ status: "DRAFT" });
+
+    mockRawRequest.mockResolvedValueOnce({ data: null, error: { message: "Read failed" } });
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(article));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+    });
+
+    expect(upsertInput(mockRawRequest.mock.calls[1]!).status).toBe("DRAFT");
+  });
+
+  it("should return the status and group read back after the write", async () => {
+    const mutated = createMockArticle({ status: "DRAFT", articleGroup: null });
+    const readBack = createMockArticle({
+      status: "PUBLISHED",
+      articleGroup: { id: "grp_1", name: "Basics" },
+    });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(readBack));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(mutated));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(readBack));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    const result = await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+    });
+
+    expect(result.status).toBe("PUBLISHED");
+    expect(result.articleGroup).toEqual({ id: "grp_1", name: "Basics" });
+  });
+
+  it("should fall back to the mutation result when the read-back fails", async () => {
+    const article = createMockArticle({ status: "DRAFT" });
+
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
+    mockRawRequest.mockResolvedValueOnce({ data: null, error: { message: "Read failed" } });
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    const result = await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Welcome to our help center</p>",
+    });
+
+    expect(result.id).toBe("art_123");
+    expect(result.status).toBe("DRAFT");
   });
 
   it("should include optional fields when provided", async () => {
     const article = createMockArticle({ status: "DRAFT" });
 
-    mockRawRequest.mockResolvedValueOnce({
-      data: {
-        upsertHelpCenterArticle: { helpCenterArticle: article, error: null },
-      },
-      error: null,
-    });
-    mockRawRequest.mockResolvedValueOnce({
-      data: { myWorkspace: { id: "ws_456" } },
-      error: null,
-    });
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(article));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
 
     await upsertHelpCenterArticle({
       helpCenterId: "hc_123",
@@ -456,21 +604,17 @@ describe("upsertHelpCenterArticle", () => {
       helpCenterArticleGroupId: "grp_1",
     });
 
-    const upsertCall = mockRawRequest.mock.calls[0]!;
-    expect(upsertCall![0]!.variables.input.description).toBe("A test article");
-    expect(upsertCall![0]!.variables.input.slug).toBe("test-article");
-    expect(upsertCall![0]!.variables.input.helpCenterArticleGroupId).toBe("grp_1");
+    const input = upsertInput(mockRawRequest.mock.calls[0]!);
+    expect(input.description).toBe("A test article");
+    expect(input.slug).toBe("test-article");
+    expect(input.helpCenterArticleGroupId).toBe("grp_1");
   });
 
   it("should omit link when workspace query fails", async () => {
     const article = createMockArticle({ status: "DRAFT" });
 
-    mockRawRequest.mockResolvedValueOnce({
-      data: {
-        upsertHelpCenterArticle: { helpCenterArticle: article, error: null },
-      },
-      error: null,
-    });
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(article));
     mockRawRequest.mockResolvedValueOnce({
       data: null,
       error: { message: "Workspace error" },

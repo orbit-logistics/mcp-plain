@@ -418,15 +418,49 @@ export const getHelpCenterArticleBySlug = async (input: GetHelpCenterArticleBySl
   };
 };
 
+/**
+ * Read a single article, or return null when it cannot be read.
+ * Used by the upsert to carry fields forward that the caller did not send, and
+ * to read back what actually landed after the mutation.
+ */
+const fetchArticle = async (
+  client: ReturnType<typeof getPlainClient>,
+  helpCenterArticleId: string
+): Promise<RawArticleFull | null> => {
+  const result = await client.rawRequest({
+    query: GET_HELP_CENTER_ARTICLE_QUERY,
+    variables: { helpCenterArticleId },
+  });
+
+  if (result.error) {
+    return null;
+  }
+
+  const data = result.data as { helpCenterArticle: RawArticleFull | null };
+  return data.helpCenterArticle ?? null;
+};
+
 export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInput) => {
   const client = getPlainClient();
+
+  // Plain's upsert REPLACES the article: every field left out of the input is
+  // reset rather than preserved. So on an update we read the article first and
+  // carry its status and group forward unless the caller passed them explicitly.
+  const existing = input.helpCenterArticleId
+    ? await fetchArticle(client, input.helpCenterArticleId)
+    : null;
+
+  // DRAFT is the default for NEW articles only. Forcing it on an update would
+  // take a published article off the public help center.
+  const status = input.status ?? existing?.status ?? "DRAFT";
+  const helpCenterArticleGroupId = input.helpCenterArticleGroupId ?? existing?.articleGroup?.id;
 
   const variables: Record<string, unknown> = {
     helpCenterId: input.helpCenterId,
     title: input.title,
     contentHtml: input.contentHtml,
     description: input.description,
-    status: "DRAFT", // Always force DRAFT
+    status,
   };
 
   if (input.helpCenterArticleId) {
@@ -435,9 +469,9 @@ export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInpu
   if (input.slug !== undefined) {
     variables.slug = input.slug;
   }
-  // Only set group when creating, not when updating (to preserve existing group)
-  if (input.helpCenterArticleGroupId !== undefined && !input.helpCenterArticleId) {
-    variables.helpCenterArticleGroupId = input.helpCenterArticleGroupId;
+  // Always send the group. Omitting it on an update clears the article's group.
+  if (helpCenterArticleGroupId !== undefined) {
+    variables.helpCenterArticleGroupId = helpCenterArticleGroupId;
   }
 
   const result = await client.rawRequest({
@@ -466,7 +500,12 @@ export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInpu
     );
   }
 
-  const article = mutationResult.helpCenterArticle!;
+  const mutated = mutationResult.helpCenterArticle!;
+
+  // Read the article back so the caller sees what actually landed instead of
+  // trusting the mutation payload. If the read fails the write still happened,
+  // so fall back to the mutation payload rather than reporting a failure.
+  const article = (await fetchArticle(client, mutated.id)) ?? mutated;
 
   // Fetch workspace ID for the UI link
   const workspaceResult = await client.rawRequest({
