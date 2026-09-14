@@ -66,7 +66,7 @@ PLAIN_API_KEY=plainApiKey_xxx npx @orbitlogistics/mcp-plain@latest
 - `list_help_center_articles` - List articles with full content
 - `get_help_center_article` - Get article by ID
 - `get_help_center_article_by_slug` - Get article by URL slug
-- `upsert_help_center_article` - Create or update an article (new articles default to DRAFT; updates keep the article's current status, group and slug unless you pass them)
+- `upsert_help_center_article` - Create or update an article (new articles default to DRAFT; updates keep the article's current status, group and slug unless you pass them, and always keep its icon and labels)
 - `create_help_center_article_group` - Create an article group
 - `delete_help_center_article_group` - Delete an empty article group
 

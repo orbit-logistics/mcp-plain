@@ -586,8 +586,28 @@ describe("upsertHelpCenterArticle", () => {
     );
   });
 
-  it("should fall back to DRAFT when the pre-update read fails", async () => {
-    const article = createMockArticle({ status: "DRAFT" });
+  it("refuses to update when the pre-update read fails", async () => {
+    mockRawRequest.mockResolvedValueOnce({ data: null, error: { message: "Read failed" } });
+
+    await expect(
+      upsertHelpCenterArticle({
+        helpCenterId: "hc_123",
+        helpCenterArticleId: "art_123",
+        title: "Getting Started",
+        description: "How to get started",
+        contentHtml: "<p>Updated content</p>",
+      })
+    ).rejects.toThrow(/refusing to write/);
+
+    // The read is the only call: no mutation went out.
+    expect(mockRawRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates without the read when status and group are passed explicitly", async () => {
+    const article = createMockArticle({
+      status: "PUBLISHED",
+      articleGroup: { id: "grp_2", name: "Advanced" },
+    });
 
     mockRawRequest.mockResolvedValueOnce({ data: null, error: { message: "Read failed" } });
     mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
@@ -600,9 +620,77 @@ describe("upsertHelpCenterArticle", () => {
       title: "Getting Started",
       description: "How to get started",
       contentHtml: "<p>Updated content</p>",
+      status: "PUBLISHED",
+      helpCenterArticleGroupId: "grp_2",
     });
 
-    expect(upsertInput(mockRawRequest.mock.calls[1]!).status).toBe("DRAFT");
+    const sent = upsertInput(mockRawRequest.mock.calls[1]!);
+    expect(sent.status).toBe("PUBLISHED");
+    expect(sent.helpCenterArticleGroupId).toBe("grp_2");
+  });
+
+  it("should send the existing icon and labels on an update", async () => {
+    const existing = createMockArticle({
+      icon: "\u{1F4DA}",
+      labelTypes: [{ id: "lt_1" }, { id: "lt_2" }],
+    });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+    });
+
+    const sent = upsertInput(mockRawRequest.mock.calls[1]!);
+    expect(sent.icon).toBe("\u{1F4DA}");
+    expect(sent.labelTypeIds).toEqual(["lt_1", "lt_2"]);
+  });
+
+  it("should omit icon and labels when the article has none", async () => {
+    const existing = createMockArticle({ icon: null, labelTypes: [] });
+
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(existing));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      helpCenterArticleId: "art_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>Updated content</p>",
+    });
+
+    const sent = upsertInput(mockRawRequest.mock.calls[1]!);
+    expect(sent).not.toHaveProperty("icon");
+    expect(sent).not.toHaveProperty("labelTypeIds");
+  });
+
+  it("should send no icon or labels when creating an article", async () => {
+    const article = createMockArticle({ status: "DRAFT" });
+
+    mockRawRequest.mockResolvedValueOnce(upsertResponse(article));
+    mockRawRequest.mockResolvedValueOnce(articleReadResponse(article));
+    mockRawRequest.mockResolvedValueOnce(workspaceResponse);
+
+    await upsertHelpCenterArticle({
+      helpCenterId: "hc_123",
+      title: "Getting Started",
+      description: "How to get started",
+      contentHtml: "<p>New content</p>",
+    });
+
+    const sent = upsertInput(mockRawRequest.mock.calls[0]!);
+    expect(sent).not.toHaveProperty("icon");
+    expect(sent).not.toHaveProperty("labelTypeIds");
   });
 
   it("should return the status and group read back after the write", async () => {

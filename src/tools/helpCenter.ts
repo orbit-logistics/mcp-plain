@@ -101,6 +101,10 @@ const GET_HELP_CENTER_ARTICLE_QUERY = `
       status
       description
       contentHtml
+      icon
+      labelTypes {
+        id
+      }
       articleGroup {
         id
         name
@@ -240,6 +244,10 @@ interface RawArticleFull extends RawArticleSummary {
   contentHtml: string;
   createdAt: { iso8601: string };
   updatedAt: { iso8601: string };
+  // Only selected by GET_HELP_CENTER_ARTICLE_QUERY, which is what the upsert
+  // reads. Optional so the other article reads keep type-checking.
+  icon?: string | null;
+  labelTypes?: Array<{ id: string }> | null;
 }
 
 // --- Tool implementations ---
@@ -450,6 +458,20 @@ export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInpu
     ? await fetchArticle(client, input.helpCenterArticleId)
     : null;
 
+  // A failed pre-update read would leave every carried-forward field unknown,
+  // and the replace would then do exactly the damage the read exists to prevent:
+  // unpublish the article, clear its group, drop its icon and labels. Refuse to
+  // write on a guess unless the caller stated status and group themselves.
+  if (
+    input.helpCenterArticleId &&
+    !existing &&
+    (input.status === undefined || input.helpCenterArticleGroupId === undefined)
+  ) {
+    throw new Error(
+      `Could not read article ${input.helpCenterArticleId} before the update; refusing to write, because the upsert replaces the article. Pass status and helpCenterArticleGroupId explicitly to update without the read.`
+    );
+  }
+
   // DRAFT is the default for NEW articles only. Forcing it on an update would
   // take a published article off the public help center.
   const status = input.status ?? existing?.status ?? "DRAFT";
@@ -458,6 +480,10 @@ export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInpu
   // than letting the replace regenerate it. Left unset when creating, so Plain
   // derives the slug from the title as before.
   const slug = input.slug ?? existing?.slug;
+  // The icon and the labels are replaced by the upsert just like the group, and
+  // the tool takes no input for either, so they can only come from the read.
+  const icon = existing?.icon ?? undefined;
+  const labelTypeIds = existing?.labelTypes?.map((labelType) => labelType.id);
 
   const variables: Record<string, unknown> = {
     helpCenterId: input.helpCenterId,
@@ -476,6 +502,12 @@ export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInpu
   // Always send the group. Omitting it on an update clears the article's group.
   if (helpCenterArticleGroupId !== undefined) {
     variables.helpCenterArticleGroupId = helpCenterArticleGroupId;
+  }
+  if (icon !== undefined) {
+    variables.icon = icon;
+  }
+  if (labelTypeIds !== undefined && labelTypeIds.length > 0) {
+    variables.labelTypeIds = labelTypeIds;
   }
 
   const result = await client.rawRequest({
