@@ -101,6 +101,10 @@ const GET_HELP_CENTER_ARTICLE_QUERY = `
       status
       description
       contentHtml
+      icon
+      labelTypes {
+        id
+      }
       articleGroup {
         id
         name
@@ -240,6 +244,10 @@ interface RawArticleFull extends RawArticleSummary {
   contentHtml: string;
   createdAt: { iso8601: string };
   updatedAt: { iso8601: string };
+  // Only selected by GET_HELP_CENTER_ARTICLE_QUERY, which is what the upsert
+  // reads. Optional so the other article reads keep type-checking.
+  icon?: string | null;
+  labelTypes?: Array<{ id: string }> | null;
 }
 
 // --- Tool implementations ---
@@ -418,26 +426,88 @@ export const getHelpCenterArticleBySlug = async (input: GetHelpCenterArticleBySl
   };
 };
 
+/**
+ * Read a single article, or return null when it cannot be read.
+ * Used by the upsert to carry fields forward that the caller did not send, and
+ * to read back what actually landed after the mutation.
+ */
+const fetchArticle = async (
+  client: ReturnType<typeof getPlainClient>,
+  helpCenterArticleId: string
+): Promise<RawArticleFull | null> => {
+  const result = await client.rawRequest({
+    query: GET_HELP_CENTER_ARTICLE_QUERY,
+    variables: { helpCenterArticleId },
+  });
+
+  if (result.error) {
+    return null;
+  }
+
+  const data = result.data as { helpCenterArticle: RawArticleFull | null };
+  return data.helpCenterArticle ?? null;
+};
+
 export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInput) => {
   const client = getPlainClient();
+
+  // Plain's upsert REPLACES the article: every field left out of the input is
+  // reset rather than preserved. So on an update we read the article first and
+  // carry its status and group forward unless the caller passed them explicitly.
+  const existing = input.helpCenterArticleId
+    ? await fetchArticle(client, input.helpCenterArticleId)
+    : null;
+
+  // A failed pre-update read would leave every carried-forward field unknown,
+  // and the replace would then do exactly the damage the read exists to prevent:
+  // unpublish the article, clear its group, drop its icon and labels. Refuse to
+  // write on a guess unless the caller stated status and group themselves.
+  if (
+    input.helpCenterArticleId &&
+    !existing &&
+    (input.status === undefined || input.helpCenterArticleGroupId === undefined)
+  ) {
+    throw new Error(
+      `Could not read article ${input.helpCenterArticleId} before the update; refusing to write, because the upsert replaces the article. Pass status and helpCenterArticleGroupId explicitly to update without the read.`
+    );
+  }
+
+  // DRAFT is the default for NEW articles only. Forcing it on an update would
+  // take a published article off the public help center.
+  const status = input.status ?? existing?.status ?? "DRAFT";
+  const helpCenterArticleGroupId = input.helpCenterArticleGroupId ?? existing?.articleGroup?.id;
+  // The slug is part of the public article URL, so carry it forward too rather
+  // than letting the replace regenerate it. Left unset when creating, so Plain
+  // derives the slug from the title as before.
+  const slug = input.slug ?? existing?.slug;
+  // The icon and the labels are replaced by the upsert just like the group, and
+  // the tool takes no input for either, so they can only come from the read.
+  const icon = existing?.icon ?? undefined;
+  const labelTypeIds = existing?.labelTypes?.map((labelType) => labelType.id);
 
   const variables: Record<string, unknown> = {
     helpCenterId: input.helpCenterId,
     title: input.title,
     contentHtml: input.contentHtml,
     description: input.description,
-    status: "DRAFT", // Always force DRAFT
+    status,
   };
 
   if (input.helpCenterArticleId) {
     variables.helpCenterArticleId = input.helpCenterArticleId;
   }
-  if (input.slug !== undefined) {
-    variables.slug = input.slug;
+  if (slug !== undefined) {
+    variables.slug = slug;
   }
-  // Only set group when creating, not when updating (to preserve existing group)
-  if (input.helpCenterArticleGroupId !== undefined && !input.helpCenterArticleId) {
-    variables.helpCenterArticleGroupId = input.helpCenterArticleGroupId;
+  // Always send the group. Omitting it on an update clears the article's group.
+  if (helpCenterArticleGroupId !== undefined) {
+    variables.helpCenterArticleGroupId = helpCenterArticleGroupId;
+  }
+  if (icon !== undefined) {
+    variables.icon = icon;
+  }
+  if (labelTypeIds !== undefined && labelTypeIds.length > 0) {
+    variables.labelTypeIds = labelTypeIds;
   }
 
   const result = await client.rawRequest({
@@ -466,7 +536,12 @@ export const upsertHelpCenterArticle = async (input: UpsertHelpCenterArticleInpu
     );
   }
 
-  const article = mutationResult.helpCenterArticle!;
+  const mutated = mutationResult.helpCenterArticle!;
+
+  // Read the article back so the caller sees what actually landed instead of
+  // trusting the mutation payload. If the read fails the write still happened,
+  // so fall back to the mutation payload rather than reporting a failure.
+  const article = (await fetchArticle(client, mutated.id)) ?? mutated;
 
   // Fetch workspace ID for the UI link
   const workspaceResult = await client.rawRequest({

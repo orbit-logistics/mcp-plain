@@ -630,11 +630,24 @@ export const upsertHelpCenterArticleInputSchema = z.object({
     .optional()
     .describe("Existing article ID for updates. Omit to create a new article."),
   description: z.string().describe("Short description / summary of the article"),
-  slug: z.string().optional().describe("URL slug for the article"),
+  slug: z
+    .string()
+    .optional()
+    .describe(
+      "URL slug for the article. On an update, defaults to the article's current slug."
+    ),
   helpCenterArticleGroupId: z
     .string()
     .optional()
-    .describe("Article group ID to place the article in"),
+    .describe(
+      "Article group ID to place the article in. On an update, defaults to the article's current group."
+    ),
+  status: z
+    .enum(["DRAFT", "PUBLISHED"])
+    .optional()
+    .describe(
+      "Publication status. Defaults to DRAFT for new articles and to the article's current status on an update."
+    ),
 });
 
 export const createHelpCenterArticleGroupInputSchema = z.object({
